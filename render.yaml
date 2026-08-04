@@ -1,0 +1,29 @@
+# Blueprint Render — à utiliser via "New +" → "Blueprint" dans le dashboard
+# Render, en pointant vers le dépôt Git contenant ce dossier. Crée en un
+# clic : (1) une base Postgres gratuite pour stocker l'historique des cotes,
+# (2) un Cron Job qui exécute collect_live_odds_render.py toutes les 4
+# minutes, 24h/24 — indépendamment de cet environnement de préparation.
+#
+# La variable DATABASE_URL est injectée automatiquement par Render dans le
+# cron job grâce au bloc "fromDatabase" ci-dessous : aucune configuration
+# manuelle de connexion à faire.
+
+databases:
+  - name: hippique-cotes-db
+    plan: free
+    databaseName: hippique_cotes
+    user: hippique
+
+services:
+  - type: cron
+    name: collecteur-cotes-pmu
+    runtime: python
+    plan: starter
+    schedule: "*/4 * * * *"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python3 collect_live_odds_render.py"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hippique-cotes-db
+          property: connectionString
