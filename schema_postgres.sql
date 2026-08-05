@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS cotes_historique (
     numero              INTEGER NOT NULL,
     horodatage          TEXT NOT NULL,
     cote                REAL NOT NULL,
+    cote_reference       REAL,       -- cote d'ouverture ("dernierRapportReference" côté PMU) — utile pour PRG-2B / H-16 (mouvement de cote)
+    tendance             TEXT,       -- "+"/"-" tel que fourni par le PMU (indicateurTendance)
+    favori                BOOLEAN,   -- statut favori tel que calculé par le PMU au moment de la lecture
     minutes_avant_depart INTEGER
 );
 
