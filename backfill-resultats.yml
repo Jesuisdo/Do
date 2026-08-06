@@ -1,0 +1,43 @@
+# Fichier à créer dans le dépôt GitHub à l'emplacement EXACT :
+#   .github/workflows/backfill-resultats.yml
+#
+# Contrairement à collecte-cotes.yml, celui-ci NE se déclenche JAMAIS tout
+# seul (pas de "schedule") — uniquement à la demande, avec une période
+# précise, depuis l'onglet Actions du dépôt.
+#
+# Conseil : fais des périodes d'environ 1 an maximum par exécution (ex:
+# 2023-01-01 à 2023-12-31), pour rester raisonnable vis-à-vis de cette
+# source non officielle et rester dans la limite de 6h par exécution
+# GitHub Actions. Tu peux relancer autant de fois que tu veux pour
+# différentes périodes, plus tard, sans risque de doublons.
+
+name: Backfill résultats historiques
+
+on:
+  workflow_dispatch:
+    inputs:
+      date_debut:
+        description: "Date de début (YYYY-MM-DD)"
+        required: true
+      date_fin:
+        description: "Date de fin (YYYY-MM-DD)"
+        required: true
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - run: python3 backfill_resultats.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATE_DEBUT: ${{ inputs.date_debut }}
+          DATE_FIN: ${{ inputs.date_fin }}
