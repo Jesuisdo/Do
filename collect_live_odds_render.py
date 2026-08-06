@@ -80,6 +80,18 @@ def _now_paris():
     return datetime.now(PARIS_TZ) if PARIS_TZ else datetime.utcnow()
 
 
+def _parse_valeur_penetrometre(v):
+    """PMU renvoie la valeur du pénétromètre (mesure officielle de l'état du
+    terrain) en notation française avec virgule (ex: "3,1"). On la convertit
+    en nombre pour pouvoir l'exploiter statistiquement."""
+    if v is None:
+        return None
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
 def fetch_live_snapshot():
     """Retourne la liste des courses actuellement suivies (départ dans la
     fenêtre d'anticipation), avec leurs partants et cotes en direct.
@@ -96,6 +108,7 @@ def fetch_live_snapshot():
     for reunion in programme.get("programme", {}).get("reunions", []):
         r_num = reunion.get("numOfficiel")
         hippodrome = (reunion.get("hippodrome") or {}).get("libelleCourt", "INCONNU")
+        meteo = reunion.get("meteo") or {}
         for course in reunion.get("courses", []):
             c_num = course.get("numExterne") or course.get("numOrdre")
             heure_depart_ms = course.get("heureDepart")
@@ -106,10 +119,11 @@ def fetch_live_snapshot():
                 continue
             delta_ms = heure_depart_ms - now_ms
             if -retard_ms <= delta_ms <= fenetre_ms:
-                courses_a_suivre.append((r_num, c_num, hippodrome, heure_depart_ms))
+                penetrometre = course.get("penetrometre") or {}
+                courses_a_suivre.append((r_num, c_num, hippodrome, heure_depart_ms, meteo, penetrometre))
 
     snapshot = []
-    for r_num, c_num, hippodrome, heure_depart_ms in courses_a_suivre:
+    for r_num, c_num, hippodrome, heure_depart_ms, meteo, penetrometre in courses_a_suivre:
         try:
             detail = _http_get_json(f"{PROGRAMME_BASE}/{date_str}/R{r_num}/C{c_num}/participants")
         except Exception:
@@ -141,6 +155,12 @@ def fetch_live_snapshot():
             "r_c": f"R{r_num}/C{c_num}",
             "heure_depart": depart_dt.strftime("%H:%M:%S"),
             "partants": partants,
+            "meteo_temperature": meteo.get("temperature"),
+            "meteo_force_vent": meteo.get("forceVent"),
+            "meteo_direction_vent": meteo.get("directionVent"),
+            "meteo_nebulosite": meteo.get("nebulositeLibelleCourt"),
+            "terrain_intitule": penetrometre.get("intitule"),
+            "terrain_valeur_penetrometre": _parse_valeur_penetrometre(penetrometre.get("valeurMesure")),
         })
 
     return snapshot
@@ -171,11 +191,16 @@ def poll_once(conn, now: datetime):
         for course in snapshot:
             cid = course["course_id"]
             cur.execute(
-                """INSERT INTO courses (course_id, date_course, hippodrome, r_c, heure_depart, date_decouverte)
-                   VALUES (%s,%s,%s,%s,%s,%s)
+                """INSERT INTO courses (course_id, date_course, hippodrome, r_c, heure_depart, date_decouverte,
+                                        meteo_temperature, meteo_force_vent, meteo_direction_vent, meteo_nebulosite,
+                                        terrain_intitule, terrain_valeur_penetrometre)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (course_id) DO NOTHING""",
                 (cid, course["date_course"], course["hippodrome"], course["r_c"],
-                 course["heure_depart"], now.isoformat()),
+                 course["heure_depart"], now.isoformat(),
+                 course.get("meteo_temperature"), course.get("meteo_force_vent"),
+                 course.get("meteo_direction_vent"), course.get("meteo_nebulosite"),
+                 course.get("terrain_intitule"), course.get("terrain_valeur_penetrometre")),
             )
             m_avant = minutes_avant_depart(course["date_course"], course["heure_depart"], now)
             for p in course.get("partants", []):
