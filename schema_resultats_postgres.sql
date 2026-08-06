@@ -18,7 +18,13 @@ CREATE TABLE IF NOT EXISTS resultats_courses (
     partants_declares    INTEGER,
     heure_depart         TEXT,
     date_collecte        TEXT NOT NULL,
-    raw_json             TEXT
+    raw_json             TEXT,
+    meteo_temperature          INTEGER,
+    meteo_force_vent           INTEGER,
+    meteo_direction_vent       TEXT,
+    meteo_nebulosite           TEXT,
+    terrain_intitule           TEXT,
+    terrain_valeur_penetrometre REAL
 );
 
 CREATE TABLE IF NOT EXISTS resultats_partants (
