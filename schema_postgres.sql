@@ -20,7 +20,13 @@ CREATE TABLE IF NOT EXISTS courses (
     hippodrome      TEXT,
     r_c             TEXT,
     heure_depart    TEXT,
-    date_decouverte TEXT NOT NULL   -- horodatage de la première fois où cette course a été vue dans le flux de cotes en direct
+    date_decouverte TEXT NOT NULL,  -- horodatage de la première fois où cette course a été vue dans le flux de cotes en direct
+    meteo_temperature          INTEGER,  -- °C, prévision PMU au niveau de la réunion
+    meteo_force_vent           INTEGER,
+    meteo_direction_vent       TEXT,
+    meteo_nebulosite           TEXT,
+    terrain_intitule           TEXT,    -- ex: "Bon", "Souple" — mesure officielle PMU (pénétromètre)
+    terrain_valeur_penetrometre REAL
 );
 
 CREATE TABLE IF NOT EXISTS partants (
@@ -28,6 +34,24 @@ CREATE TABLE IF NOT EXISTS partants (
     course_id   TEXT NOT NULL REFERENCES courses(course_id),
     numero      INTEGER NOT NULL,
     nom_cheval  TEXT,
+    -- Champs ajoutés : déjà présents dans le JSON PMU récupéré pour les cotes,
+    -- simplement pas extraits jusqu'ici.
+    nom_pere              TEXT,
+    nom_mere              TEXT,
+    oeilleres              TEXT,
+    deferre                 TEXT,     -- ferrage (NULL = ferré normalement)
+    driver_change            BOOLEAN,
+    avis_entraineur           TEXT,
+    nombre_courses             INTEGER,
+    nombre_victoires            INTEGER,
+    nombre_places                 INTEGER,
+    nombre_places_second            INTEGER,
+    nombre_places_troisieme           INTEGER,
+    gains_victoires                     INTEGER,
+    gains_place                          INTEGER,
+    gains_annee_encours                   INTEGER,
+    gains_annee_precedente                 INTEGER,
+    handicap_distance                       INTEGER,
     UNIQUE(course_id, numero)
 );
 
