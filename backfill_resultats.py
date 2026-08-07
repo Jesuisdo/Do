@@ -125,17 +125,32 @@ def backfill_jour(conn, date_str_ddmmyyyy):
                 for p in participants:
                     if p.get("numPmu") is None:
                         continue
+                    gp = p.get("gainsParticipant") or {}
+                    commentaire = p.get("commentaireApresCourse") or {}
                     cur.execute(
                         """INSERT INTO resultats_partants
                            (course_id, numero, nom_cheval, sexe, age, nom_jockey,
-                            nom_entraineur, musique, gains, position_arrivee)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            nom_entraineur, musique, gains, position_arrivee,
+                            nom_pere, nom_mere, oeilleres, deferre, driver_change, avis_entraineur,
+                            nombre_courses, nombre_victoires, nombre_places, nombre_places_second,
+                            nombre_places_troisieme, gains_victoires, gains_place,
+                            gains_annee_encours, gains_annee_precedente, handicap_distance,
+                            temps_obtenu, reduction_kilometrique, incident, commentaire_apres_course)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                            ON CONFLICT (course_id, numero) DO NOTHING""",
                         (
                             course_id, p["numPmu"], p.get("nom"), p.get("sexe"), p.get("age"),
                             p.get("driver"), p.get("entraineur"), p.get("musique"),
-                            (p.get("gainsParticipant") or {}).get("gainsCarriere"),
+                            gp.get("gainsCarriere"),
                             p.get("ordreArrivee"),
+                            p.get("nomPere"), p.get("nomMere"), p.get("oeilleres"), p.get("deferre"),
+                            p.get("driverChange"), p.get("avisEntraineur"),
+                            p.get("nombreCourses"), p.get("nombreVictoires"), p.get("nombrePlaces"),
+                            p.get("nombrePlacesSecond"), p.get("nombrePlacesTroisieme"),
+                            gp.get("gainsVictoires"), gp.get("gainsPlace"),
+                            gp.get("gainsAnneeEnCours"), gp.get("gainsAnneePrecedente"),
+                            p.get("handicapDistance"), p.get("tempsObtenu"), p.get("reductionKilometrique"),
+                            p.get("incident"), commentaire.get("texte"),
                         ),
                     )
                 n_courses += 1
