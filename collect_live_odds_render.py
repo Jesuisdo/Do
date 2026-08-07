@@ -44,7 +44,14 @@ SOURCE_NAME = "pmu_live_odds_render"
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema_postgres.sql")
 
 PROGRAMME_BASE = "https://offline.turfinfo.api.pmu.fr/rest/client/7/programme"
-FENETRE_ANTICIPATION_MIN = 90    # capte une course dès 90 min avant son départ
+# Élargi à 720 min (12h, ~ toute une journée de courses PMU) plutôt que 90 min.
+# Raison : GitHub Actions gratuit n'honore pas fidèlement le "toutes les 5 min"
+# demandé (constaté : intervalles réels de plusieurs heures). Avec une fenêtre
+# étroite, une course pouvait démarrer ET se terminer entièrement entre deux
+# exécutions du programme, sans jamais être captée. Avec une fenêtre large, on
+# capte toute course du jour pas encore terminée (voir STATUTS_TERMINES),
+# quel que soit le moment où le programme parvient à s'exécuter.
+FENETRE_ANTICIPATION_MIN = 720
 FENETRE_RETARD_MIN = 5           # continue de suivre jusqu'à 5 min après l'heure officielle (départs parfois retardés)
 
 STATUTS_TERMINES = {
@@ -136,6 +143,7 @@ def fetch_live_snapshot():
         for p in detail.get("participants", []):
             direct = p.get("dernierRapportDirect") or {}
             reference = p.get("dernierRapportReference") or {}
+            gains = p.get("gainsParticipant") or {}
             cote = direct.get("rapport")
             if cote is None or p.get("numPmu") is None:
                 continue
@@ -146,6 +154,22 @@ def fetch_live_snapshot():
                 "cote_reference": reference.get("rapport"),
                 "tendance": direct.get("indicateurTendance"),
                 "favori": bool(direct.get("favoris", False)),
+                "nom_pere": p.get("nomPere"),
+                "nom_mere": p.get("nomMere"),
+                "oeilleres": p.get("oeilleres"),
+                "deferre": p.get("deferre"),
+                "driver_change": p.get("driverChange"),
+                "avis_entraineur": p.get("avisEntraineur"),
+                "nombre_courses": p.get("nombreCourses"),
+                "nombre_victoires": p.get("nombreVictoires"),
+                "nombre_places": p.get("nombrePlaces"),
+                "nombre_places_second": p.get("nombrePlacesSecond"),
+                "nombre_places_troisieme": p.get("nombrePlacesTroisieme"),
+                "gains_victoires": gains.get("gainsVictoires"),
+                "gains_place": gains.get("gainsPlace"),
+                "gains_annee_encours": gains.get("gainsAnneeEnCours"),
+                "gains_annee_precedente": gains.get("gainsAnneePrecedente"),
+                "handicap_distance": p.get("handicapDistance"),
             })
 
         snapshot.append({
@@ -205,10 +229,20 @@ def poll_once(conn, now: datetime):
             m_avant = minutes_avant_depart(course["date_course"], course["heure_depart"], now)
             for p in course.get("partants", []):
                 cur.execute(
-                    """INSERT INTO partants (course_id, numero, nom_cheval)
-                       VALUES (%s,%s,%s)
+                    """INSERT INTO partants
+                       (course_id, numero, nom_cheval, nom_pere, nom_mere, oeilleres, deferre,
+                        driver_change, avis_entraineur, nombre_courses, nombre_victoires,
+                        nombre_places, nombre_places_second, nombre_places_troisieme,
+                        gains_victoires, gains_place, gains_annee_encours, gains_annee_precedente,
+                        handicap_distance)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (course_id, numero) DO NOTHING""",
-                    (cid, p["numero"], p.get("nom_cheval")),
+                    (cid, p["numero"], p.get("nom_cheval"), p.get("nom_pere"), p.get("nom_mere"),
+                     p.get("oeilleres"), p.get("deferre"), p.get("driver_change"), p.get("avis_entraineur"),
+                     p.get("nombre_courses"), p.get("nombre_victoires"), p.get("nombre_places"),
+                     p.get("nombre_places_second"), p.get("nombre_places_troisieme"),
+                     p.get("gains_victoires"), p.get("gains_place"), p.get("gains_annee_encours"),
+                     p.get("gains_annee_precedente"), p.get("handicap_distance")),
                 )
                 cur.execute(
                     """INSERT INTO cotes_historique
