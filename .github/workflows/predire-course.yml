@@ -1,0 +1,41 @@
+# Fichier à créer dans ton dépôt GitHub à l'emplacement EXACT :
+#   .github/workflows/predire-course.yml
+#
+# Calcule un pronostic pour UNE course PLAT précise, à lancer manuellement
+# depuis l'onglet Actions en renseignant la date et le numéro de réunion/course
+# (visibles sur le programme PMU du jour). Le résultat est à la fois affiché
+# dans les logs et enregistré dans la table `predictions` de Supabase.
+
+name: Prédire une course
+
+on:
+  workflow_dispatch:
+    inputs:
+      date_ddmmyyyy:
+        description: "Date de la course (format JJMMAAAA, ex: 15082026)"
+        required: true
+      r_num:
+        description: "Numéro de réunion (ex: 1)"
+        required: true
+      c_num:
+        description: "Numéro de course (ex: 3)"
+        required: true
+
+jobs:
+  predire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - run: python3 predict_course.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATE_CIBLE: ${{ github.event.inputs.date_ddmmyyyy }}
+          R_NUM: ${{ github.event.inputs.r_num }}
+          C_NUM: ${{ github.event.inputs.c_num }}
