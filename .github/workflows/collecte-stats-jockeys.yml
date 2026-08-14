@@ -5,6 +5,17 @@
 # n'ont pas besoin d'être rafraîchies plus souvent — contrairement aux cotes
 # ou aux résultats, un jockey ne change pas de palmarès d'heure en heure).
 # Peut aussi être déclenché manuellement à tout moment (workflow_dispatch).
+#
+# Geny.com est une application JavaScript : les statistiques ne sont visibles
+# qu'après exécution du JS côté client (constaté le 14/08/2026 : un simple
+# requests.get ne renvoie que le squelette de l'app). Le script pilote donc
+# un vrai navigateur headless (Playwright/Chromium), d'où l'étape
+# supplémentaire d'installation du navigateur ci-dessous — invoquée via
+# "python -m playwright" plutôt que la commande "playwright" seule, pour
+# garantir qu'on utilise le même interpréteur Python que le script (un run
+# précédent a échoué avec "Executable doesn't exist" alors que l'étape
+# d'installation avait pourtant réussi en quelques secondes seulement,
+# signe qu'elle n'avait rien téléchargé).
 
 name: Collecte statistiques jockeys/drivers/entraîneurs
 
@@ -24,6 +35,8 @@ jobs:
           python-version: "3.11"
 
       - run: pip install -r requirements.txt
+
+      - run: python -m playwright install --with-deps chromium
 
       - run: python3 collect_stats_jockeys.py
         env:
