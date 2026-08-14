@@ -107,8 +107,9 @@ def backfill_jour(conn, date_str_ddmmyyyy):
                         prix_nom, montant_allocation, partants_declares, heure_depart,
                         date_collecte, raw_json,
                         meteo_temperature, meteo_force_vent, meteo_direction_vent, meteo_nebulosite,
-                        terrain_intitule, terrain_valeur_penetrometre)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        terrain_intitule, terrain_valeur_penetrometre,
+                        corde, type_piste, categorie_particularite, condition_age, condition_sexe, specialite)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (course_id) DO NOTHING""",
                     (
                         course_id, date_iso, hippodrome, f"R{r_num}/C{c_num}",
@@ -119,6 +120,8 @@ def backfill_jour(conn, date_str_ddmmyyyy):
                         meteo.get("temperature"), meteo.get("forceVent"),
                         meteo.get("directionVent"), meteo.get("nebulositeLibelleCourt"),
                         penetrometre.get("intitule"), _parse_valeur_penetrometre(penetrometre.get("valeurMesure")),
+                        course.get("corde"), course.get("typePiste"), course.get("categorieParticularite"),
+                        course.get("conditionAge"), course.get("conditionSexe"), course.get("specialite"),
                     ),
                 )
 
@@ -127,6 +130,7 @@ def backfill_jour(conn, date_str_ddmmyyyy):
                         continue
                     gp = p.get("gainsParticipant") or {}
                     commentaire = p.get("commentaireApresCourse") or {}
+                    distance_prec = p.get("distanceChevalPrecedent") or {}
                     cur.execute(
                         """INSERT INTO resultats_partants
                            (course_id, numero, nom_cheval, sexe, age, nom_jockey,
@@ -135,8 +139,14 @@ def backfill_jour(conn, date_str_ddmmyyyy):
                             nombre_courses, nombre_victoires, nombre_places, nombre_places_second,
                             nombre_places_troisieme, gains_victoires, gains_place,
                             gains_annee_encours, gains_annee_precedente, handicap_distance,
-                            temps_obtenu, reduction_kilometrique, incident, commentaire_apres_course)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            temps_obtenu, reduction_kilometrique, incident, commentaire_apres_course,
+                            id_cheval, nom_pere_mere, handicap_valeur, handicap_poids,
+                            poids_condition_monte, poids_condition_monte_change,
+                            distance_cheval_precedent_libelle, distance_cheval_precedent_code,
+                            place_corde, indicateur_inedit, jument_pleine, race, pays,
+                            pays_entrainement, proprietaire, eleveur, robe)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                                   %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                            ON CONFLICT (course_id, numero) DO NOTHING""",
                         (
                             course_id, p["numPmu"], p.get("nom"), p.get("sexe"), p.get("age"),
@@ -151,6 +161,12 @@ def backfill_jour(conn, date_str_ddmmyyyy):
                             gp.get("gainsAnneeEnCours"), gp.get("gainsAnneePrecedente"),
                             p.get("handicapDistance"), p.get("tempsObtenu"), p.get("reductionKilometrique"),
                             p.get("incident"), commentaire.get("texte"),
+                            p.get("idCheval"), p.get("nomPereMere"), p.get("handicapValeur"), p.get("handicapPoids"),
+                            p.get("poidsConditionMonte"), p.get("poidsConditionMonteChange"),
+                            distance_prec.get("libelleLong"), distance_prec.get("code"),
+                            p.get("placeCorde"), p.get("indicateurInedit"), p.get("jumentPleine"),
+                            p.get("race"), p.get("pays"), p.get("paysEntrainement"),
+                            p.get("proprietaire"), p.get("eleveur"), (p.get("robe") or {}).get("libelleLong"),
                         ),
                     )
                 n_courses += 1
