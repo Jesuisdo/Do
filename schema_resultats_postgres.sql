@@ -24,7 +24,13 @@ CREATE TABLE IF NOT EXISTS resultats_courses (
     meteo_direction_vent       TEXT,
     meteo_nebulosite           TEXT,
     terrain_intitule           TEXT,
-    terrain_valeur_penetrometre REAL
+    terrain_valeur_penetrometre REAL,
+    corde                       TEXT,
+    type_piste                  TEXT,
+    categorie_particularite     TEXT,
+    condition_age               TEXT,
+    condition_sexe              TEXT,
+    specialite                  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS resultats_partants (
@@ -60,6 +66,24 @@ CREATE TABLE IF NOT EXISTS resultats_partants (
     reduction_kilometrique   INTEGER,  -- temps au kilomètre, centièmes de seconde
     incident                 TEXT,     -- ex: disqualification, allure irrégulière
     commentaire_apres_course TEXT,     -- commentaire d'analyste post-course
+    -- Couverture maximale (même liste que partants, cf schema_postgres.sql) :
+    id_cheval                    TEXT,
+    nom_pere_mere                 TEXT,
+    handicap_valeur                REAL,
+    handicap_poids                   INTEGER,
+    poids_condition_monte              INTEGER,
+    poids_condition_monte_change        BOOLEAN,
+    distance_cheval_precedent_libelle    TEXT,
+    distance_cheval_precedent_code        INTEGER,
+    place_corde                            INTEGER,
+    indicateur_inedit                       BOOLEAN,
+    jument_pleine                            BOOLEAN,
+    race                                      TEXT,
+    pays                                      TEXT,
+    pays_entrainement                        TEXT,
+    proprietaire                             TEXT,
+    eleveur                                  TEXT,
+    robe                                     TEXT,
     UNIQUE(course_id, numero)
 );
 
@@ -73,4 +97,5 @@ CREATE TABLE IF NOT EXISTS resultats_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_resultats_partants_course ON resultats_partants(course_id);
+CREATE INDEX IF NOT EXISTS idx_resultats_partants_id_cheval ON resultats_partants(id_cheval);
 CREATE INDEX IF NOT EXISTS idx_resultats_courses_date ON resultats_courses(date_course);
