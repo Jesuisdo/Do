@@ -40,7 +40,19 @@ import requests
 DATABASE_URL = os.environ.get("DATABASE_URL")
 GENY_BASE = "https://www.geny.com/jockey"
 SLEEP_BETWEEN_CALLS_SEC = 2.0
-HEADERS = {"User-Agent": "Mozilla/5.0 (recherche-hippique-pipeline/1.0)"}
+# En-têtes proches d'un vrai navigateur : un simple "requests.py-ish" User-Agent
+# se fait bloquer plus facilement par les protections anti-bot (Cloudflare et
+# assimilés) que peuvent avoir des sites comme Geny.com face à des IP de
+# datacenter (celles des runners GitHub Actions notamment).
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.geny.com/",
+}
 
 # Ancre de fin de bloc : cette phrase suit toujours le bloc de stats "12
 # derniers mois" qu'on veut extraire, et permet de délimiter la zone de texte
@@ -123,10 +135,25 @@ def parse_stats_bloc(text: str):
 
 def fetch_stats_intervenant(slug_geny: str):
     url = f"{GENY_BASE}/{slug_geny}"
-    resp = requests.get(url, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
+    resp = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
+    if resp.status_code != 200:
+        # Diagnostic explicite plutôt qu'un simple raise_for_status() : on veut
+        # savoir, dans les logs du prochain run, si c'est un blocage anti-bot
+        # (ex: 403, ou 200 mais page de vérification Cloudflare) plutôt que de
+        # se contenter d'un message générique.
+        raise RuntimeError(
+            f"HTTP {resp.status_code} pour {url} — extrait réponse: {resp.text[:200]!r}"
+        )
     text = _strip_html(resp.text)
-    return parse_stats_bloc(text)
+    try:
+        return parse_stats_bloc(text)
+    except ValueError as e:
+        # Idem : si le parsing échoue alors qu'on a bien reçu un 200, c'est
+        # probablement que le contenu reçu n'est pas la vraie page (page de
+        # vérification, redirection inattendue, structure changée) — on
+        # journalise un extrait pour pouvoir diagnostiquer sans avoir à
+        # reproduire l'appel manuellement.
+        raise ValueError(f"{e} — url finale: {resp.url}, longueur texte: {len(text)}, début: {text[:300]!r}")
 
 
 def main():
