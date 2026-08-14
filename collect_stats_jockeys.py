@@ -35,33 +35,21 @@ import time
 from datetime import datetime, timezone
 
 import psycopg2
-import requests
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 GENY_BASE = "https://www.geny.com/jockey"
 SLEEP_BETWEEN_CALLS_SEC = 2.0
-# En-têtes proches d'un vrai navigateur : un simple "requests.py-ish" User-Agent
-# se fait bloquer plus facilement par les protections anti-bot (Cloudflare et
-# assimilés) que peuvent avoir des sites comme Geny.com face à des IP de
-# datacenter (celles des runners GitHub Actions notamment).
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://www.geny.com/",
-}
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 # Ancre de fin de bloc : cette phrase suit toujours le bloc de stats "12
 # derniers mois" qu'on veut extraire, et permet de délimiter la zone de texte
 # à parser sans dépendre de la structure HTML exacte (non vérifiable sans
 # accès direct au DOM au moment de l'écriture de ce script — voir README).
 ANCRE_FIN_BLOC = "Statistiques réalisées sur les courses des 12 derniers mois"
-
-TAG_RE = re.compile(r"<[^>]+>")
-WS_RE = re.compile(r"[ \t\xa0]+")
 
 
 def get_connection():
@@ -77,14 +65,6 @@ def _to_float(s):
         return float(s.replace(",", "."))
     except (TypeError, ValueError):
         return None
-
-
-def _strip_html(html: str) -> str:
-    """Supprime les balises et normalise les espaces, pour retomber sur un
-    texte comparable à ce qu'on observe en lecture normale de la page."""
-    text = TAG_RE.sub("\n", html)
-    text = WS_RE.sub(" ", text)
-    return text
 
 
 def parse_stats_bloc(text: str):
@@ -133,27 +113,30 @@ def parse_stats_bloc(text: str):
     }
 
 
-def fetch_stats_intervenant(slug_geny: str):
+def fetch_stats_intervenant(page, slug_geny: str):
+    """Récupère et parse la fiche Geny d'un intervenant via un navigateur
+    headless. Geny.com est une application JavaScript : les statistiques
+    n'existent pas dans le HTML brut initial (un simple requests.get ne
+    renvoie que le squelette de l'app et son bundle JS — constaté directement
+    dans les logs du run GitHub Actions du 14/08/2026, qui montraient un texte
+    de 470 000+ caractères composé presque entièrement de lignes vides suivies
+    d'un script de rechargement de chunk JS, sans aucune trace des stats).
+    D'où l'usage de Playwright/Chromium ici plutôt qu'un appel HTTP simple."""
     url = f"{GENY_BASE}/{slug_geny}"
-    resp = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
-    if resp.status_code != 200:
-        # Diagnostic explicite plutôt qu'un simple raise_for_status() : on veut
-        # savoir, dans les logs du prochain run, si c'est un blocage anti-bot
-        # (ex: 403, ou 200 mais page de vérification Cloudflare) plutôt que de
-        # se contenter d'un message générique.
-        raise RuntimeError(
-            f"HTTP {resp.status_code} pour {url} — extrait réponse: {resp.text[:200]!r}"
+    page.goto(url, timeout=30000, wait_until="domcontentloaded")
+    try:
+        page.wait_for_function(
+            "sel => document.body.innerText.includes(sel)",
+            arg=ANCRE_FIN_BLOC,
+            timeout=15000,
         )
-    text = _strip_html(resp.text)
+    except PlaywrightTimeoutError:
+        pass  # on tente quand même le parsing ci-dessous ; l'erreur sera explicite si le texte manque vraiment
+    text = page.inner_text("body")
     try:
         return parse_stats_bloc(text)
     except ValueError as e:
-        # Idem : si le parsing échoue alors qu'on a bien reçu un 200, c'est
-        # probablement que le contenu reçu n'est pas la vraie page (page de
-        # vérification, redirection inattendue, structure changée) — on
-        # journalise un extrait pour pouvoir diagnostiquer sans avoir à
-        # reproduire l'appel manuellement.
-        raise ValueError(f"{e} — url finale: {resp.url}, longueur texte: {len(text)}, début: {text[:300]!r}")
+        raise ValueError(f"{e} — url: {url}, longueur texte: {len(text)}, début: {text[:300]!r}")
 
 
 def main():
@@ -170,44 +153,50 @@ def main():
     print(f"{len(intervenants)} intervenant(s) résolu(s) à mettre à jour.")
 
     n_ok, n_echec = 0, 0
-    for nom_pmu, role, id_geny, nom_complet, slug in intervenants:
-        try:
-            stats = fetch_stats_intervenant(slug)
-        except Exception as e:
-            print(f"[ECHEC] {nom_pmu} ({nom_complet}) : {type(e).__name__}: {e}")
-            n_echec += 1
-            time.sleep(SLEEP_BETWEEN_CALLS_SEC)
-            continue
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(user_agent=USER_AGENT, locale="fr-FR")
 
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO stats_intervenants
-                   (id_geny, nom_complet, role, nb_courses_12mois, victoires, victoires_pct,
-                    places_2_3, places_2_3_pct, places_4_5, places_4_5_pct,
-                    ecart_gagnant, rapport_moyen_gagnant, ecart_place, rapport_moyen_place, date_maj)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (id_geny, date_maj) DO UPDATE SET
-                     nb_courses_12mois = EXCLUDED.nb_courses_12mois,
-                     victoires = EXCLUDED.victoires,
-                     victoires_pct = EXCLUDED.victoires_pct,
-                     places_2_3 = EXCLUDED.places_2_3,
-                     places_2_3_pct = EXCLUDED.places_2_3_pct,
-                     places_4_5 = EXCLUDED.places_4_5,
-                     places_4_5_pct = EXCLUDED.places_4_5_pct,
-                     ecart_gagnant = EXCLUDED.ecart_gagnant,
-                     rapport_moyen_gagnant = EXCLUDED.rapport_moyen_gagnant,
-                     ecart_place = EXCLUDED.ecart_place,
-                     rapport_moyen_place = EXCLUDED.rapport_moyen_place""",
-                (id_geny, nom_complet, role, stats["nb_courses_12mois"], stats["victoires"], stats["victoires_pct"],
-                 stats["places_2_3"], stats["places_2_3_pct"], stats["places_4_5"], stats["places_4_5_pct"],
-                 stats["ecart_gagnant"], stats["rapport_moyen_gagnant"],
-                 stats["ecart_place"], stats["rapport_moyen_place"], today),
-            )
-        conn.commit()
-        n_ok += 1
-        print(f"[OK] {nom_pmu} ({nom_complet}) : {stats['victoires']}/{stats['nb_courses_12mois']} "
-              f"({stats['victoires_pct']}%)")
-        time.sleep(SLEEP_BETWEEN_CALLS_SEC)
+        for nom_pmu, role, id_geny, nom_complet, slug in intervenants:
+            try:
+                stats = fetch_stats_intervenant(page, slug)
+            except Exception as e:
+                print(f"[ECHEC] {nom_pmu} ({nom_complet}) : {type(e).__name__}: {e}")
+                n_echec += 1
+                time.sleep(SLEEP_BETWEEN_CALLS_SEC)
+                continue
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO stats_intervenants
+                       (id_geny, nom_complet, role, nb_courses_12mois, victoires, victoires_pct,
+                        places_2_3, places_2_3_pct, places_4_5, places_4_5_pct,
+                        ecart_gagnant, rapport_moyen_gagnant, ecart_place, rapport_moyen_place, date_maj)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (id_geny, date_maj) DO UPDATE SET
+                         nb_courses_12mois = EXCLUDED.nb_courses_12mois,
+                         victoires = EXCLUDED.victoires,
+                         victoires_pct = EXCLUDED.victoires_pct,
+                         places_2_3 = EXCLUDED.places_2_3,
+                         places_2_3_pct = EXCLUDED.places_2_3_pct,
+                         places_4_5 = EXCLUDED.places_4_5,
+                         places_4_5_pct = EXCLUDED.places_4_5_pct,
+                         ecart_gagnant = EXCLUDED.ecart_gagnant,
+                         rapport_moyen_gagnant = EXCLUDED.rapport_moyen_gagnant,
+                         ecart_place = EXCLUDED.ecart_place,
+                         rapport_moyen_place = EXCLUDED.rapport_moyen_place""",
+                    (id_geny, nom_complet, role, stats["nb_courses_12mois"], stats["victoires"], stats["victoires_pct"],
+                     stats["places_2_3"], stats["places_2_3_pct"], stats["places_4_5"], stats["places_4_5_pct"],
+                     stats["ecart_gagnant"], stats["rapport_moyen_gagnant"],
+                     stats["ecart_place"], stats["rapport_moyen_place"], today),
+                )
+            conn.commit()
+            n_ok += 1
+            print(f"[OK] {nom_pmu} ({nom_complet}) : {stats['victoires']}/{stats['nb_courses_12mois']} "
+                  f"({stats['victoires_pct']}%)")
+            time.sleep(SLEEP_BETWEEN_CALLS_SEC)
+
+        browser.close()
 
     print(f"\nTerminé : {n_ok} succès, {n_echec} échec(s) sur {len(intervenants)} intervenant(s).")
     conn.close()
