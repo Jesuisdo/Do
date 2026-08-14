@@ -26,7 +26,15 @@ CREATE TABLE IF NOT EXISTS courses (
     meteo_direction_vent       TEXT,
     meteo_nebulosite           TEXT,
     terrain_intitule           TEXT,    -- ex: "Bon", "Souple" — mesure officielle PMU (pénétromètre)
-    terrain_valeur_penetrometre REAL
+    terrain_valeur_penetrometre REAL,
+    -- Champs course ajoutés (couverture maximale) : caractéristiques de course
+    -- déjà présentes dans le JSON récupéré, simplement pas extraites jusqu'ici.
+    corde                       TEXT,   -- ex: "CORDE_DROITE"
+    type_piste                  TEXT,   -- ex: "HERBE"
+    categorie_particularite     TEXT,   -- ex: "HANDICAP_DIVISE"
+    condition_age               TEXT,
+    condition_sexe              TEXT,
+    specialite                  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS partants (
@@ -52,6 +60,25 @@ CREATE TABLE IF NOT EXISTS partants (
     gains_annee_encours                   INTEGER,
     gains_annee_precedente                 INTEGER,
     handicap_distance                       INTEGER,
+    -- Couverture maximale (demande explicite : capturer tout ce qui est
+    -- disponible, même si on ne s'en sert pas encore tout de suite) :
+    id_cheval                    TEXT,   -- identifiant PMU stable du cheval, clé pour le suivi longitudinal
+    nom_pere_mere                 TEXT,  -- père de la mère (BM sire)
+    handicap_valeur                REAL, -- note officielle de performance/valeur
+    handicap_poids                   INTEGER, -- poids porté (centièmes de kg)
+    poids_condition_monte              INTEGER,
+    poids_condition_monte_change        BOOLEAN,
+    distance_cheval_precedent_libelle    TEXT,   -- marge à l'arrivée précédente, ex: "1/2 longueur"
+    distance_cheval_precedent_code        INTEGER,
+    place_corde                            INTEGER, -- position de départ / couloir
+    indicateur_inedit                       BOOLEAN, -- cheval qui n'a jamais couru
+    jument_pleine                            BOOLEAN,
+    race                                      TEXT,  -- race/race du cheval, ex: "PUR-SANG"
+    pays                                      TEXT,
+    pays_entrainement                        TEXT,
+    proprietaire                             TEXT,
+    eleveur                                  TEXT,
+    robe                                     TEXT,
     UNIQUE(course_id, numero)
 );
 
