@@ -1,22 +1,8 @@
-# Fichier à créer dans ton dépôt GitHub à l'emplacement EXACT :
-#   .github/workflows/collecte-stats-jockeys.yml
-#
-# Exécute collect_stats_jockeys.py une fois par semaine (ces statistiques
-# n'ont pas besoin d'être rafraîchies plus souvent — contrairement aux cotes
-# ou aux résultats, un jockey ne change pas de palmarès d'heure en heure).
-# Peut aussi être déclenché manuellement à tout moment (workflow_dispatch).
-#
-# Geny.com est une application JavaScript : les statistiques ne sont visibles
-# qu'après exécution du JS côté client (constaté le 14/08/2026 : un simple
-# requests.get ne renvoie que le squelette de l'app). Le script pilote donc
-# un vrai navigateur headless (Playwright/Chromium), d'où l'étape
-# supplémentaire d'installation du navigateur ci-dessous.
-
-name: Collecte statistiques jockeys/drivers/entraîneurs
+name: Collecte résultats quotidienne
 
 on:
   schedule:
-    - cron: "0 5 * * 1"   # tous les lundis à 5h UTC
+    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -24,15 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - run: pip install -r requirements.txt
-
-      - run: playwright install --with-deps chromium
-
-      - run: python3 collect_stats_jockeys.py
+      - run: python3 backfill_resultats.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
