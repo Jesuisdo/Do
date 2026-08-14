@@ -127,10 +127,10 @@ def fetch_live_snapshot():
             delta_ms = heure_depart_ms - now_ms
             if -retard_ms <= delta_ms <= fenetre_ms:
                 penetrometre = course.get("penetrometre") or {}
-                courses_a_suivre.append((r_num, c_num, hippodrome, heure_depart_ms, meteo, penetrometre))
+                courses_a_suivre.append((r_num, c_num, hippodrome, heure_depart_ms, meteo, penetrometre, course))
 
     snapshot = []
-    for r_num, c_num, hippodrome, heure_depart_ms, meteo, penetrometre in courses_a_suivre:
+    for r_num, c_num, hippodrome, heure_depart_ms, meteo, penetrometre, course_info in courses_a_suivre:
         try:
             detail = _http_get_json(f"{PROGRAMME_BASE}/{date_str}/R{r_num}/C{c_num}/participants")
         except Exception:
@@ -147,6 +147,7 @@ def fetch_live_snapshot():
             cote = direct.get("rapport")
             if cote is None or p.get("numPmu") is None:
                 continue
+            distance_prec = p.get("distanceChevalPrecedent") or {}
             partants.append({
                 "numero": p["numPmu"],
                 "nom_cheval": p.get("nom"),
@@ -170,6 +171,23 @@ def fetch_live_snapshot():
                 "gains_annee_encours": gains.get("gainsAnneeEnCours"),
                 "gains_annee_precedente": gains.get("gainsAnneePrecedente"),
                 "handicap_distance": p.get("handicapDistance"),
+                "id_cheval": p.get("idCheval"),
+                "nom_pere_mere": p.get("nomPereMere"),
+                "handicap_valeur": p.get("handicapValeur"),
+                "handicap_poids": p.get("handicapPoids"),
+                "poids_condition_monte": p.get("poidsConditionMonte"),
+                "poids_condition_monte_change": p.get("poidsConditionMonteChange"),
+                "distance_cheval_precedent_libelle": distance_prec.get("libelleLong"),
+                "distance_cheval_precedent_code": distance_prec.get("code"),
+                "place_corde": p.get("placeCorde"),
+                "indicateur_inedit": p.get("indicateurInedit"),
+                "jument_pleine": p.get("jumentPleine"),
+                "race": p.get("race"),
+                "pays": p.get("pays"),
+                "pays_entrainement": p.get("paysEntrainement"),
+                "proprietaire": p.get("proprietaire"),
+                "eleveur": p.get("eleveur"),
+                "robe": (p.get("robe") or {}).get("libelleLong"),
             })
 
         snapshot.append({
@@ -185,6 +203,12 @@ def fetch_live_snapshot():
             "meteo_nebulosite": meteo.get("nebulositeLibelleCourt"),
             "terrain_intitule": penetrometre.get("intitule"),
             "terrain_valeur_penetrometre": _parse_valeur_penetrometre(penetrometre.get("valeurMesure")),
+            "corde": course_info.get("corde"),
+            "type_piste": course_info.get("typePiste"),
+            "categorie_particularite": course_info.get("categorieParticularite"),
+            "condition_age": course_info.get("conditionAge"),
+            "condition_sexe": course_info.get("conditionSexe"),
+            "specialite": course_info.get("specialite"),
         })
 
     return snapshot
@@ -217,14 +241,17 @@ def poll_once(conn, now: datetime):
             cur.execute(
                 """INSERT INTO courses (course_id, date_course, hippodrome, r_c, heure_depart, date_decouverte,
                                         meteo_temperature, meteo_force_vent, meteo_direction_vent, meteo_nebulosite,
-                                        terrain_intitule, terrain_valeur_penetrometre)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                        terrain_intitule, terrain_valeur_penetrometre,
+                                        corde, type_piste, categorie_particularite, condition_age, condition_sexe, specialite)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (course_id) DO NOTHING""",
                 (cid, course["date_course"], course["hippodrome"], course["r_c"],
                  course["heure_depart"], now.isoformat(),
                  course.get("meteo_temperature"), course.get("meteo_force_vent"),
                  course.get("meteo_direction_vent"), course.get("meteo_nebulosite"),
-                 course.get("terrain_intitule"), course.get("terrain_valeur_penetrometre")),
+                 course.get("terrain_intitule"), course.get("terrain_valeur_penetrometre"),
+                 course.get("corde"), course.get("type_piste"), course.get("categorie_particularite"),
+                 course.get("condition_age"), course.get("condition_sexe"), course.get("specialite")),
             )
             m_avant = minutes_avant_depart(course["date_course"], course["heure_depart"], now)
             for p in course.get("partants", []):
@@ -234,15 +261,27 @@ def poll_once(conn, now: datetime):
                         driver_change, avis_entraineur, nombre_courses, nombre_victoires,
                         nombre_places, nombre_places_second, nombre_places_troisieme,
                         gains_victoires, gains_place, gains_annee_encours, gains_annee_precedente,
-                        handicap_distance)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        handicap_distance,
+                        id_cheval, nom_pere_mere, handicap_valeur, handicap_poids,
+                        poids_condition_monte, poids_condition_monte_change,
+                        distance_cheval_precedent_libelle, distance_cheval_precedent_code,
+                        place_corde, indicateur_inedit, jument_pleine, race, pays,
+                        pays_entrainement, proprietaire, eleveur, robe)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                               %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (course_id, numero) DO NOTHING""",
                     (cid, p["numero"], p.get("nom_cheval"), p.get("nom_pere"), p.get("nom_mere"),
                      p.get("oeilleres"), p.get("deferre"), p.get("driver_change"), p.get("avis_entraineur"),
                      p.get("nombre_courses"), p.get("nombre_victoires"), p.get("nombre_places"),
                      p.get("nombre_places_second"), p.get("nombre_places_troisieme"),
                      p.get("gains_victoires"), p.get("gains_place"), p.get("gains_annee_encours"),
-                     p.get("gains_annee_precedente"), p.get("handicap_distance")),
+                     p.get("gains_annee_precedente"), p.get("handicap_distance"),
+                     p.get("id_cheval"), p.get("nom_pere_mere"), p.get("handicap_valeur"), p.get("handicap_poids"),
+                     p.get("poids_condition_monte"), p.get("poids_condition_monte_change"),
+                     p.get("distance_cheval_precedent_libelle"), p.get("distance_cheval_precedent_code"),
+                     p.get("place_corde"), p.get("indicateur_inedit"), p.get("jument_pleine"),
+                     p.get("race"), p.get("pays"), p.get("pays_entrainement"),
+                     p.get("proprietaire"), p.get("eleveur"), p.get("robe")),
                 )
                 cur.execute(
                     """INSERT INTO cotes_historique
