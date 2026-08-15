@@ -215,9 +215,20 @@ def main():
     finally:
         conn.close()
 
+    # Seuil "placé" identique à la règle PMU réelle : top 2 si 7 partants ou
+    # moins, top 3 sinon — pour que la recommandation "placé" corresponde à ce
+    # qu'un pari placé gagnerait réellement, pas un seuil arbitraire.
+    seuil_place = 2 if len(classement) <= 7 else 3
+
     print(f"\nPronostic {r_c} du {date_iso} — {len(classement)} partant(s) noté(s) :\n")
     for numero, nom_cheval, nom_jockey, rang_predit, score in classement:
-        print(f"  {rang_predit:>2}. n°{numero:<3} {nom_cheval:<22} ({nom_jockey})  score={score}")
+        if rang_predit == 1:
+            tag = "[GAGNANT]"
+        elif rang_predit <= seuil_place:
+            tag = "[PLACE]  "
+        else:
+            tag = "         "
+        print(f"  {rang_predit:>2}. {tag} n°{numero:<3} {nom_cheval:<22} ({nom_jockey})  score={score}")
 
 
 if __name__ == "__main__":
