@@ -1,0 +1,31 @@
+# Fichier à créer dans ton dépôt GitHub à l'emplacement EXACT :
+#   .github/workflows/predictions-quotidiennes.yml
+#
+# Remplace la tâche planifiée Cowork équivalente : tourne sur les serveurs
+# GitHub, tous les jours, indépendamment de si l'ordinateur/l'app est allumé.
+# Réconcilie d'abord les prédictions passées avec les résultats réels
+# désormais connus, puis enregistre un pronostic pour chaque course PLAT du
+# jour pas encore courue. Peut aussi être lancé manuellement (workflow_dispatch).
+
+name: Prédictions quotidiennes (réconciliation + génération)
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  predire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - run: python3 predict_toutes_courses_jour.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
