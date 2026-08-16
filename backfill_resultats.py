@@ -17,6 +17,19 @@ supervision. Voir .github/workflows/backfill-resultats.yml.
 Principe de prudence : avance jour par jour, journalise chaque jour
 (succès ou échec) dans resultats_log, et peut être relancé sans risque de
 doublons (ON CONFLICT DO NOTHING) si interrompu en cours de route.
+
+Résilience (ajoutée le 16/08/2026 après un run planté avec
+psycopg2.errors.NumericValueOutOfRange sur une valeur non identifiée avec
+certitude dans le JSON du 22/07/2026) :
+  - chaque course est insérée dans sa PROPRE transaction (commit après
+    chaque course, pas seulement en fin de journée) — une course
+    problématique ne doit jamais faire perdre les courses déjà traitées
+    ce jour-là, ni interrompre le reste du backfill (même principe que la
+    discussion du bug de collecte des stats jockeys du 14/08/2026) ;
+  - tout champ destiné à une colonne PostgreSQL `integer` passe par
+    _safe_int(), qui renvoie None (au lieu de laisser planter l'insertion)
+    si la valeur brute de l'API PMU dépasse la plage int4
+    (-2147483648 à 2147483647) ou n'est pas un entier valide.
 """
 import json
 import os
@@ -33,6 +46,9 @@ SLEEP_BETWEEN_CALLS_SEC = 1.0
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema_resultats_postgres.sql")
 
 STATUTS_A_IGNORER = {"COURSE_ANNULEE"}
+
+INT4_MIN = -2147483648
+INT4_MAX = 2147483647
 
 
 def get_connection():
@@ -65,115 +81,144 @@ def _parse_valeur_penetrometre(v):
         return None
 
 
+def _safe_int(v):
+    """Convertit vers un entier compatible avec une colonne PostgreSQL
+    `integer` (int4). Renvoie None plutôt que de laisser planter
+    l'INSERT si la valeur est absente, non numérique, ou hors de la plage
+    int4 — l'API PMU (non officielle) peut renvoyer des valeurs
+    inattendues sans prévenir, mieux vaut perdre un champ que toute la
+    course."""
+    if v is None:
+        return None
+    try:
+        iv = int(v)
+    except (TypeError, ValueError):
+        return None
+    if iv < INT4_MIN or iv > INT4_MAX:
+        return None
+    return iv
+
+
 def backfill_jour(conn, date_str_ddmmyyyy):
     """Récupère toutes les courses d'un jour donné. Retourne le nombre de
-    courses effectivement insérées (avec au moins un partant classé)."""
+    courses effectivement insérées (avec au moins un partant classé).
+    Chaque course est commitée individuellement : un problème sur une
+    course (donnée PMU inattendue, erreur réseau) ne fait perdre que
+    cette course, jamais les autres déjà traitées le même jour."""
     try:
         programme = _http_get_json(f"{PROGRAMME_BASE}/{date_str_ddmmyyyy}")
     except Exception as e:
         _log(conn, date_str_ddmmyyyy, 0, "ECHEC", f"programme: {type(e).__name__}: {e}")
+        conn.commit()
         return 0
 
     n_courses = 0
-    with conn.cursor() as cur:
-        for reunion in programme.get("programme", {}).get("reunions", []):
-            r_num = reunion.get("numOfficiel")
-            hippodrome = (reunion.get("hippodrome") or {}).get("libelleCourt", "INCONNU")
-            meteo = reunion.get("meteo") or {}
-            for course in reunion.get("courses", []):
-                c_num = course.get("numExterne") or course.get("numOrdre")
-                statut = course.get("statut", "")
-                if r_num is None or c_num is None or statut in STATUTS_A_IGNORER:
-                    continue
+    n_echecs = 0
+    for reunion in programme.get("programme", {}).get("reunions", []):
+        r_num = reunion.get("numOfficiel")
+        hippodrome = (reunion.get("hippodrome") or {}).get("libelleCourt", "INCONNU")
+        meteo = reunion.get("meteo") or {}
+        for course in reunion.get("courses", []):
+            c_num = course.get("numExterne") or course.get("numOrdre")
+            statut = course.get("statut", "")
+            if r_num is None or c_num is None or statut in STATUTS_A_IGNORER:
+                continue
 
-                date_iso = datetime.strptime(date_str_ddmmyyyy, "%d%m%Y").date().isoformat()
-                course_id = f"{date_iso}_{hippodrome}_R{r_num}C{c_num}".replace(" ", "-")
+            date_iso = datetime.strptime(date_str_ddmmyyyy, "%d%m%Y").date().isoformat()
+            course_id = f"{date_iso}_{hippodrome}_R{r_num}C{c_num}".replace(" ", "-")
 
-                try:
-                    detail = _http_get_json(f"{PROGRAMME_BASE}/{date_str_ddmmyyyy}/R{r_num}/C{c_num}/participants")
-                except Exception:
-                    time.sleep(SLEEP_BETWEEN_CALLS_SEC)
-                    continue
+            try:
+                detail = _http_get_json(f"{PROGRAMME_BASE}/{date_str_ddmmyyyy}/R{r_num}/C{c_num}/participants")
+            except Exception:
+                time.sleep(SLEEP_BETWEEN_CALLS_SEC)
+                continue
 
-                participants = detail.get("participants", [])
-                if not participants:
-                    time.sleep(SLEEP_BETWEEN_CALLS_SEC)
-                    continue
+            participants = detail.get("participants", [])
+            if not participants:
+                time.sleep(SLEEP_BETWEEN_CALLS_SEC)
+                continue
 
+            try:
                 penetrometre = course.get("penetrometre") or {}
-                cur.execute(
-                    """INSERT INTO resultats_courses
-                       (course_id, date_course, hippodrome, r_c, discipline, distance_m,
-                        prix_nom, montant_allocation, partants_declares, heure_depart,
-                        date_collecte, raw_json,
-                        meteo_temperature, meteo_force_vent, meteo_direction_vent, meteo_nebulosite,
-                        terrain_intitule, terrain_valeur_penetrometre,
-                        corde, type_piste, categorie_particularite, condition_age, condition_sexe, specialite)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                       ON CONFLICT (course_id) DO NOTHING""",
-                    (
-                        course_id, date_iso, hippodrome, f"R{r_num}/C{c_num}",
-                        course.get("discipline"), course.get("distance"), course.get("libelle"),
-                        course.get("montantTotalOffert") or course.get("montantPrix"),
-                        len(participants), course.get("heureDepart"),
-                        datetime.utcnow().isoformat(), json.dumps(course, ensure_ascii=False),
-                        meteo.get("temperature"), meteo.get("forceVent"),
-                        meteo.get("directionVent"), meteo.get("nebulositeLibelleCourt"),
-                        penetrometre.get("intitule"), _parse_valeur_penetrometre(penetrometre.get("valeurMesure")),
-                        course.get("corde"), course.get("typePiste"), course.get("categorieParticularite"),
-                        course.get("conditionAge"), course.get("conditionSexe"), course.get("specialite"),
-                    ),
-                )
-
-                for p in participants:
-                    if p.get("numPmu") is None:
-                        continue
-                    gp = p.get("gainsParticipant") or {}
-                    commentaire = p.get("commentaireApresCourse") or {}
-                    distance_prec = p.get("distanceChevalPrecedent") or {}
+                with conn.cursor() as cur:
                     cur.execute(
-                        """INSERT INTO resultats_partants
-                           (course_id, numero, nom_cheval, sexe, age, nom_jockey,
-                            nom_entraineur, musique, gains, position_arrivee,
-                            nom_pere, nom_mere, oeilleres, deferre, driver_change, avis_entraineur,
-                            nombre_courses, nombre_victoires, nombre_places, nombre_places_second,
-                            nombre_places_troisieme, gains_victoires, gains_place,
-                            gains_annee_encours, gains_annee_precedente, handicap_distance,
-                            temps_obtenu, reduction_kilometrique, incident, commentaire_apres_course,
-                            id_cheval, nom_pere_mere, handicap_valeur, handicap_poids,
-                            poids_condition_monte, poids_condition_monte_change,
-                            distance_cheval_precedent_libelle, distance_cheval_precedent_code,
-                            place_corde, indicateur_inedit, jument_pleine, race, pays,
-                            pays_entrainement, proprietaire, eleveur, robe)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                                   %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                           ON CONFLICT (course_id, numero) DO NOTHING""",
+                        """INSERT INTO resultats_courses
+                           (course_id, date_course, hippodrome, r_c, discipline, distance_m,
+                            prix_nom, montant_allocation, partants_declares, heure_depart,
+                            date_collecte, raw_json,
+                            meteo_temperature, meteo_force_vent, meteo_direction_vent, meteo_nebulosite,
+                            terrain_intitule, terrain_valeur_penetrometre,
+                            corde, type_piste, categorie_particularite, condition_age, condition_sexe, specialite)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                           ON CONFLICT (course_id) DO NOTHING""",
                         (
-                            course_id, p["numPmu"], p.get("nom"), p.get("sexe"), p.get("age"),
-                            p.get("driver"), p.get("entraineur"), p.get("musique"),
-                            gp.get("gainsCarriere"),
-                            p.get("ordreArrivee"),
-                            p.get("nomPere"), p.get("nomMere"), p.get("oeilleres"), p.get("deferre"),
-                            p.get("driverChange"), p.get("avisEntraineur"),
-                            p.get("nombreCourses"), p.get("nombreVictoires"), p.get("nombrePlaces"),
-                            p.get("nombrePlacesSecond"), p.get("nombrePlacesTroisieme"),
-                            gp.get("gainsVictoires"), gp.get("gainsPlace"),
-                            gp.get("gainsAnneeEnCours"), gp.get("gainsAnneePrecedente"),
-                            p.get("handicapDistance"), p.get("tempsObtenu"), p.get("reductionKilometrique"),
-                            p.get("incident"), commentaire.get("texte"),
-                            p.get("idCheval"), p.get("nomPereMere"), p.get("handicapValeur"), p.get("handicapPoids"),
-                            p.get("poidsConditionMonte"), p.get("poidsConditionMonteChange"),
-                            distance_prec.get("libelleLong"), distance_prec.get("code"),
-                            p.get("placeCorde"), p.get("indicateurInedit"), p.get("jumentPleine"),
-                            p.get("race"), p.get("pays"), p.get("paysEntrainement"),
-                            p.get("proprietaire"), p.get("eleveur"), (p.get("robe") or {}).get("libelleLong"),
+                            course_id, date_iso, hippodrome, f"R{r_num}/C{c_num}",
+                            course.get("discipline"), _safe_int(course.get("distance")), course.get("libelle"),
+                            _safe_int(course.get("montantTotalOffert") or course.get("montantPrix")),
+                            len(participants), course.get("heureDepart"),
+                            datetime.utcnow().isoformat(), json.dumps(course, ensure_ascii=False),
+                            _safe_int(meteo.get("temperature")), _safe_int(meteo.get("forceVent")),
+                            meteo.get("directionVent"), meteo.get("nebulositeLibelleCourt"),
+                            penetrometre.get("intitule"), _parse_valeur_penetrometre(penetrometre.get("valeurMesure")),
+                            course.get("corde"), course.get("typePiste"), course.get("categorieParticularite"),
+                            course.get("conditionAge"), course.get("conditionSexe"), course.get("specialite"),
                         ),
                     )
-                n_courses += 1
-                time.sleep(SLEEP_BETWEEN_CALLS_SEC)
 
-    conn.commit()
-    _log(conn, date_str_ddmmyyyy, n_courses, "OK", f"{n_courses} course(s) avec résultats")
+                    for p in participants:
+                        if p.get("numPmu") is None:
+                            continue
+                        gp = p.get("gainsParticipant") or {}
+                        commentaire = p.get("commentaireApresCourse") or {}
+                        distance_prec = p.get("distanceChevalPrecedent") or {}
+                        cur.execute(
+                            """INSERT INTO resultats_partants
+                               (course_id, numero, nom_cheval, sexe, age, nom_jockey,
+                                nom_entraineur, musique, gains, position_arrivee,
+                                nom_pere, nom_mere, oeilleres, deferre, driver_change, avis_entraineur,
+                                nombre_courses, nombre_victoires, nombre_places, nombre_places_second,
+                                nombre_places_troisieme, gains_victoires, gains_place,
+                                gains_annee_encours, gains_annee_precedente, handicap_distance,
+                                temps_obtenu, reduction_kilometrique, incident, commentaire_apres_course,
+                                id_cheval, nom_pere_mere, handicap_valeur, handicap_poids,
+                                poids_condition_monte, poids_condition_monte_change,
+                                distance_cheval_precedent_libelle, distance_cheval_precedent_code,
+                                place_corde, indicateur_inedit, jument_pleine, race, pays,
+                                pays_entrainement, proprietaire, eleveur, robe)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT (course_id, numero) DO NOTHING""",
+                            (
+                                course_id, _safe_int(p["numPmu"]), p.get("nom"), p.get("sexe"), _safe_int(p.get("age")),
+                                p.get("driver"), p.get("entraineur"), p.get("musique"),
+                                _safe_int(gp.get("gainsCarriere")),
+                                _safe_int(p.get("ordreArrivee")),
+                                p.get("nomPere"), p.get("nomMere"), p.get("oeilleres"), p.get("deferre"),
+                                p.get("driverChange"), p.get("avisEntraineur"),
+                                _safe_int(p.get("nombreCourses")), _safe_int(p.get("nombreVictoires")), _safe_int(p.get("nombrePlaces")),
+                                _safe_int(p.get("nombrePlacesSecond")), _safe_int(p.get("nombrePlacesTroisieme")),
+                                _safe_int(gp.get("gainsVictoires")), _safe_int(gp.get("gainsPlace")),
+                                _safe_int(gp.get("gainsAnneeEnCours")), _safe_int(gp.get("gainsAnneePrecedente")),
+                                _safe_int(p.get("handicapDistance")), _safe_int(p.get("tempsObtenu")), _safe_int(p.get("reductionKilometrique")),
+                                p.get("incident"), commentaire.get("texte"),
+                                p.get("idCheval"), p.get("nomPereMere"), p.get("handicapValeur"), _safe_int(p.get("handicapPoids")),
+                                _safe_int(p.get("poidsConditionMonte")), p.get("poidsConditionMonteChange"),
+                                distance_prec.get("libelleLong"), _safe_int(distance_prec.get("code")),
+                                _safe_int(p.get("placeCorde")), p.get("indicateurInedit"), p.get("jumentPleine"),
+                                p.get("race"), p.get("pays"), p.get("paysEntrainement"),
+                                p.get("proprietaire"), p.get("eleveur"), (p.get("robe") or {}).get("libelleLong"),
+                            ),
+                        )
+                conn.commit()
+                n_courses += 1
+            except Exception as e:
+                conn.rollback()
+                n_echecs += 1
+                print(f"  [ECHEC course] {date_iso} R{r_num}/C{c_num} {hippodrome} : {type(e).__name__}: {e}")
+
+            time.sleep(SLEEP_BETWEEN_CALLS_SEC)
+
+    _log(conn, date_str_ddmmyyyy, n_courses, "OK", f"{n_courses} course(s) avec résultats, {n_echecs} échec(s)")
     conn.commit()
     return n_courses
 
