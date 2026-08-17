@@ -1,0 +1,26 @@
+# Analyse "base historique vivante" — sélection statistique de variables
+# (demandée le 17/08/2026). Se déclenche uniquement à la demande
+# (workflow_dispatch) : c'est une analyse ponctuelle à relancer manuellement
+# à mesure que la base s'enrichit, pas une tâche quotidienne automatique.
+
+name: Analyse variables avancée (base historique vivante)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  analyser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install psycopg2-binary pandas numpy scikit-learn
+
+      - run: python3 entrainer_et_evaluer.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
