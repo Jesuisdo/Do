@@ -1,0 +1,153 @@
+# Backfill historique MASSIF (plusieurs annÃ©es) â demandÃ© le 17/08/2026.
+#
+# Constat : rien ne limite techniquement le backfill dans le temps.
+# L'API PMU (offline.turfinfo.api.pmu.fr, la mÃªme source non-officielle mais
+# documentÃ©e par la communautÃ© depuis 2019/2020 que celle dÃ©jÃ  utilisÃ©e par
+# backfill_resultats.py et collect_live_odds_render.py) sert des programmes
+# complets â rÃ©unions, courses, partants, arrivÃ©es, musique, gains â pour
+# n'importe quelle date passÃ©e, testÃ© et confirmÃ© jusqu'en janvier 2014
+# (15/01/2014 rÃ©pond avec des donnÃ©es rÃ©elles ; 15/01/2013 et avant ne
+# rÃ©pondent plus). Si notre base ne contenait que le 21/07 au 16/08/2026,
+# ce n'est PAS une limite de la source : c'est simplement qu'aucun backfill
+# n'avait encore Ã©tÃ© lancÃ© plus loin dans le passÃ©.
+#
+# Ce workflow lance donc un backfill massif de 2014-01-01 Ã  2026-07-20 (la
+# veille du dÃ©but de notre couverture actuelle), dÃ©coupÃ© en 51 tranches de
+# 90 jours exÃ©cutÃ©es en jobs PARALLÃLES (matrix), avec un plafond de
+# parallÃ©lisme volontairement modÃ©rÃ© (max-parallel) pour rester correct
+# envers les serveurs de PMU malgrÃ© le nombre de tranches â chaque tranche
+# respecte individuellement le mÃªme rythme d'un appel par seconde
+# (SLEEP_BETWEEN_CALLS_SEC) que le backfill normal.
+#
+# RÃ©utilise exactement backfill_resultats.py sans aucune modification : mÃªme
+# script, mÃªme base, mÃªmes tables, mÃªme logique de rÃ©silience par course
+# (commit individuel, ON CONFLICT DO NOTHING, donc relanÃ§able sans risque de
+# doublons si une tranche doit Ãªtre reprise).
+
+name: Backfill historique massif (2014-2026)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backfill-tranche:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        include:
+          - date_debut: "2014-01-01"
+            date_fin: "2014-03-31"
+          - date_debut: "2014-04-01"
+            date_fin: "2014-06-29"
+          - date_debut: "2014-06-30"
+            date_fin: "2014-09-27"
+          - date_debut: "2014-09-28"
+            date_fin: "2014-12-26"
+          - date_debut: "2014-12-27"
+            date_fin: "2015-03-26"
+          - date_debut: "2015-03-27"
+            date_fin: "2015-06-24"
+          - date_debut: "2015-06-25"
+            date_fin: "2015-09-22"
+          - date_debut: "2015-09-23"
+            date_fin: "2015-12-21"
+          - date_debut: "2015-12-22"
+            date_fin: "2016-03-20"
+          - date_debut: "2016-03-21"
+            date_fin: "2016-06-18"
+          - date_debut: "2016-06-19"
+            date_fin: "2016-09-16"
+          - date_debut: "2016-09-17"
+            date_fin: "2016-12-15"
+          - date_debut: "2016-12-16"
+            date_fin: "2017-03-15"
+          - date_debut: "2017-03-16"
+            date_fin: "2017-06-13"
+          - date_debut: "2017-06-14"
+            date_fin: "2017-09-11"
+          - date_debut: "2017-09-12"
+            date_fin: "2017-12-10"
+          - date_debut: "2017-12-11"
+            date_fin: "2018-03-10"
+          - date_debut: "2018-03-11"
+            date_fin: "2018-06-08"
+          - date_debut: "2018-06-09"
+            date_fin: "2018-09-06"
+          - date_debut: "2018-09-07"
+            date_fin: "2018-12-05"
+          - date_debut: "2018-12-06"
+            date_fin: "2019-03-05"
+          - date_debut: "2019-03-06"
+            date_fin: "2019-06-03"
+          - date_debut: "2019-06-04"
+            date_fin: "2019-09-01"
+          - date_debut: "2019-09-02"
+            date_fin: "2019-11-30"
+          - date_debut: "2019-12-01"
+            date_fin: "2020-02-28"
+          - date_debut: "2020-02-29"
+            date_fin: "2020-05-28"
+          - date_debut: "2020-05-29"
+            date_fin: "2020-08-26"
+          - date_debut: "2020-08-27"
+            date_fin: "2020-11-24"
+          - date_debut: "2020-11-25"
+            date_fin: "2021-02-22"
+          - date_debut: "2021-02-23"
+            date_fin: "2021-05-23"
+          - date_debut: "2021-05-24"
+            date_fin: "2021-08-21"
+          - date_debut: "2021-08-22"
+            date_fin: "2021-11-19"
+          - date_debut: "2021-11-20"
+            date_fin: "2022-02-17"
+          - date_debut: "2022-02-18"
+            date_fin: "2022-05-18"
+          - date_debut: "2022-05-19"
+            date_fin: "2022-08-16"
+          - date_debut: "2022-08-17"
+            date_fin: "2022-11-14"
+          - date_debut: "2022-11-15"
+            date_fin: "2023-02-12"
+          - date_debut: "2023-02-13"
+            date_fin: "2023-05-13"
+          - date_debut: "2023-05-14"
+            date_fin: "2023-08-11"
+          - date_debut: "2023-08-12"
+            date_fin: "2023-11-09"
+          - date_debut: "2023-11-10"
+            date_fin: "2024-02-07"
+          - date_debut: "2024-02-08"
+            date_fin: "2024-05-07"
+          - date_debut: "2024-05-08"
+            date_fin: "2024-08-05"
+          - date_debut: "2024-08-06"
+            date_fin: "2024-11-03"
+          - date_debut: "2024-11-04"
+            date_fin: "2025-02-01"
+          - date_debut: "2025-02-02"
+            date_fin: "2025-05-02"
+          - date_debut: "2025-05-03"
+            date_fin: "2025-07-31"
+          - date_debut: "2025-08-01"
+            date_fin: "2025-10-29"
+          - date_debut: "2025-10-30"
+            date_fin: "2026-01-27"
+          - date_debut: "2026-01-28"
+            date_fin: "2026-04-27"
+          - date_debut: "2026-04-28"
+            date_fin: "2026-07-20"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install psycopg2-binary
+      - run: python3 backfill_resultats.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATE_DEBUT: ${{ matrix.date_debut }}
+          DATE_FIN: ${{ matrix.date_fin }}
