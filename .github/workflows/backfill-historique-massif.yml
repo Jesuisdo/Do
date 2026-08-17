@@ -1,28 +1,28 @@
-# Backfill historique MASSIF (plusieurs annÃ©es) â demandÃ© le 17/08/2026.
+# Backfill historique MASSIF (plusieurs années) — demandé le 17/08/2026.
 #
 # Constat : rien ne limite techniquement le backfill dans le temps.
-# L'API PMU (offline.turfinfo.api.pmu.fr, la mÃªme source non-officielle mais
-# documentÃ©e par la communautÃ© depuis 2019/2020 que celle dÃ©jÃ  utilisÃ©e par
+# L'API PMU (offline.turfinfo.api.pmu.fr, la même source non-officielle mais
+# documentée par la communauté depuis 2019/2020 que celle déjà utilisée par
 # backfill_resultats.py et collect_live_odds_render.py) sert des programmes
-# complets â rÃ©unions, courses, partants, arrivÃ©es, musique, gains â pour
-# n'importe quelle date passÃ©e, testÃ© et confirmÃ© jusqu'en janvier 2014
-# (15/01/2014 rÃ©pond avec des donnÃ©es rÃ©elles ; 15/01/2013 et avant ne
-# rÃ©pondent plus). Si notre base ne contenait que le 21/07 au 16/08/2026,
+# complets — réunions, courses, partants, arrivées, musique, gains — pour
+# n'importe quelle date passée, testé et confirmé jusqu'en janvier 2014
+# (15/01/2014 répond avec des données réelles ; 15/01/2013 et avant ne
+# répondent plus). Si notre base ne contenait que le 21/07 au 16/08/2026,
 # ce n'est PAS une limite de la source : c'est simplement qu'aucun backfill
-# n'avait encore Ã©tÃ© lancÃ© plus loin dans le passÃ©.
+# n'avait encore été lancé plus loin dans le passé.
 #
-# Ce workflow lance donc un backfill massif de 2014-01-01 Ã  2026-07-20 (la
-# veille du dÃ©but de notre couverture actuelle), dÃ©coupÃ© en 51 tranches de
-# 90 jours exÃ©cutÃ©es en jobs PARALLÃLES (matrix), avec un plafond de
-# parallÃ©lisme volontairement modÃ©rÃ© (max-parallel) pour rester correct
-# envers les serveurs de PMU malgrÃ© le nombre de tranches â chaque tranche
-# respecte individuellement le mÃªme rythme d'un appel par seconde
+# Ce workflow lance donc un backfill massif de 2014-01-01 à 2026-07-20 (la
+# veille du début de notre couverture actuelle), découpé en 51 tranches de
+# 90 jours exécutées en jobs PARALLÈLES (matrix), avec un plafond de
+# parallélisme volontairement modéré (max-parallel) pour rester correct
+# envers les serveurs de PMU malgré le nombre de tranches — chaque tranche
+# respecte individuellement le même rythme d'un appel par seconde
 # (SLEEP_BETWEEN_CALLS_SEC) que le backfill normal.
 #
-# RÃ©utilise exactement backfill_resultats.py sans aucune modification : mÃªme
-# script, mÃªme base, mÃªmes tables, mÃªme logique de rÃ©silience par course
-# (commit individuel, ON CONFLICT DO NOTHING, donc relanÃ§able sans risque de
-# doublons si une tranche doit Ãªtre reprise).
+# Réutilise exactement backfill_resultats.py sans aucune modification : même
+# script, même base, mêmes tables, même logique de résilience par course
+# (commit individuel, ON CONFLICT DO NOTHING, donc relançable sans risque de
+# doublons si une tranche doit être reprise).
 
 name: Backfill historique massif (2014-2026)
 
