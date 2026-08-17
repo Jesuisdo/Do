@@ -29,6 +29,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, log_loss
+from sklearn.inspection import permutation_importance
 
 from analyse_variables_avancee import get_connection, charger_donnees, construire_feature_matrix
 
@@ -190,8 +191,16 @@ def main():
     for nom, c in non_nulles.items():
         print(f"  {nom:45s} coef={c:+.4f}")
 
-    importances = pd.Series(gbm.feature_importances_, index=X_train.columns).sort_values(ascending=False)
-    print(f"\nGradient boosting : top 20 variables par importance (sur {len(importances)}) :")
+    # HistGradientBoostingClassifier n'expose pas feature_importances_ (pas un
+    # ensemble d'arbres classique) : on calcule une importance par permutation
+    # sur le jeu de TEST (baisse d'AUC quand la variable est mélangée), plus
+    # honnête de toute façon puisqu'elle mesure la contribution réelle
+    # hors-échantillon plutôt qu'un simple comptage de splits internes.
+    perm = permutation_importance(
+        gbm, X_test, y_test, scoring="roc_auc", n_repeats=10, random_state=42, n_jobs=-1,
+    )
+    importances = pd.Series(perm.importances_mean, index=X_train.columns).sort_values(ascending=False)
+    print(f"\nGradient boosting : top 20 variables par importance par permutation (sur {len(importances)}, baisse d'AUC test) :")
     for nom, imp in importances.head(20).items():
         print(f"  {nom:45s} importance={imp:.4f}")
 
