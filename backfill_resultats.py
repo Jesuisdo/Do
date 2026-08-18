@@ -30,6 +30,19 @@ certitude dans le JSON du 22/07/2026) :
     _safe_int(), qui renvoie None (au lieu de laisser planter l'insertion)
     si la valeur brute de l'API PMU dépasse la plage int4
     (-2147483648 à 2147483647) ou n'est pas un entier valide.
+
+Concurrence (ajoutée le 18/08/2026 après le backfill historique massif en
+jobs parallèles) : lorsque plusieurs instances de ce script tournent en même
+temps (matrix GitHub Actions), l'appel à init_schema() par chaque instance
+provoquait un psycopg2.errors.DeadlockDetected (plusieurs sessions
+exécutaient le même DDL — CREATE TABLE IF NOT EXISTS — en même temps sur les
+mêmes tables). La variable d'environnement optionnelle SKIP_INIT_SCHEMA
+permet à un appelant qui SAIT que le schéma existe déjà de sauter cette
+vérification. Elle n'est définie par AUCUN des workflows existants
+(backfill-resultats.yml, collecte-resultats-quotidien.yml) : leur
+comportement est donc strictement inchangé, init_schema() continue de
+s'exécuter pour eux exactement comme avant. Seul le backfill massif en
+parallèle (backfill-historique-massif.yml) la définit.
 """
 import json
 import os
@@ -251,7 +264,10 @@ def main():
         sys.exit(1)
 
     conn = get_connection()
-    init_schema(conn)
+    if os.environ.get("SKIP_INIT_SCHEMA", "").lower() == "true":
+        print("SKIP_INIT_SCHEMA=true — vérification du schéma ignorée (jobs parallèles, schéma déjà garanti par ailleurs).")
+    else:
+        init_schema(conn)
 
     total = 0
     d = date_debut
