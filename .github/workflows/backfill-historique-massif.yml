@@ -21,10 +21,20 @@
 # SKIP_INIT_SCHEMA (n'affecte ni la collecte quotidienne ni un backfill
 # normal, qui ne définissent jamais cette variable).
 #
-# Ce fichier a été réduit aux 7 tranches qui ont échoué, pour les relancer
-# SEULES sans toucher au run #2 déjà en cours sur les 44 autres tranches
-# (le run déjà déclenché utilise une copie figée de ce fichier au moment de
-# son déclenchement — le modifier maintenant ne l'affecte pas).
+# Run #3 (18/08/2026) a relancé ces 7 tranches avec le correctif : succès,
+# 7/7, vérifié en base (couverture complète, aucune erreur).
+#
+# En relisant le détail complet des annotations de run #2 (une fois celui-ci
+# terminé), il s'est avéré que 21 tranches avaient échoué au total, pas
+# seulement les 7 initialement visibles (le run n'était pas encore terminé
+# au moment du premier diagnostic). 14 tranches supplémentaires n'ont donc
+# jamais été relancées avec le correctif : 12 totalement vides en base, et 2
+# ayant échoué par dépassement du timeout de 5h (dont une avec couverture
+# partielle : 84/90 jours). Ce fichier est mis à jour le 19/08/2026 pour
+# relancer CES 14 tranches, toujours avec SKIP_INIT_SCHEMA, sans toucher au
+# reste du pipeline. L'insertion est idempotente (commit par course, ON
+# CONFLICT DO NOTHING), donc relancer une tranche déjà partiellement remplie
+# ne crée aucun doublon.
 #
 # Réutilise exactement backfill_resultats.py (avec le correctif de
 # concurrence ci-dessus) sans aucune autre modification : même script, même
@@ -46,20 +56,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - date_debut: "2014-12-27"
-            date_fin: "2015-03-26"
-          - date_debut: "2015-09-23"
-            date_fin: "2015-12-21"
-          - date_debut: "2016-09-17"
-            date_fin: "2016-12-15"
-          - date_debut: "2017-03-16"
-            date_fin: "2017-06-13"
-          - date_debut: "2017-06-14"
-            date_fin: "2017-09-11"
-          - date_debut: "2017-09-12"
-            date_fin: "2017-12-10"
-          - date_debut: "2018-06-09"
-            date_fin: "2018-09-06"
+          - date_debut: "2022-02-18"
+            date_fin: "2022-05-18"
+          - date_debut: "2022-05-19"
+            date_fin: "2022-08-16"
+          - date_debut: "2022-08-17"
+            date_fin: "2022-11-14"
+          - date_debut: "2022-11-15"
+            date_fin: "2023-02-12"
+          - date_debut: "2023-02-13"
+            date_fin: "2023-05-13"
+          - date_debut: "2023-08-12"
+            date_fin: "2023-11-09"
+          - date_debut: "2023-11-10"
+            date_fin: "2024-02-07"
+          - date_debut: "2024-05-08"
+            date_fin: "2024-08-05"
+          - date_debut: "2024-08-06"
+            date_fin: "2024-11-03"
+          - date_debut: "2024-11-04"
+            date_fin: "2025-02-01"
+          - date_debut: "2025-02-02"
+            date_fin: "2025-05-02"
+          - date_debut: "2025-08-01"
+            date_fin: "2025-10-29"
+          - date_debut: "2025-10-30"
+            date_fin: "2026-01-27"
+          - date_debut: "2026-01-28"
+            date_fin: "2026-04-27"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
