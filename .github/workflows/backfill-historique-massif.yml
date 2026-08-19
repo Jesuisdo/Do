@@ -12,29 +12,39 @@
 # n'avait encore été lancé plus loin dans le passé.
 #
 # Run #2 (17-18/08/2026) a couvert les 51 tranches de 90 jours de la période
-# 2014-01-01 → 2026-07-20 en jobs parallèles (matrix, max-parallel: 4). 7 de
-# ces 51 tranches ont échoué avec psycopg2.errors.DeadlockDetected : chaque
-# instance du script vérifiait/créait le schéma (init_schema -> CREATE TABLE
-# IF NOT EXISTS ...) au démarrage, et plusieurs instances exécutant ce DDL en
-# même temps sur les mêmes tables se bloquaient mutuellement. Corrigé le
-# 18/08/2026 dans backfill_resultats.py par un flag optionnel
+# 2014-01-01 → 2026-07-20 en jobs parallèles (matrix, max-parallel: 4). 21 de
+# ces 51 tranches ont finalement échoué : la majorité (19) avec
+# psycopg2.errors.DeadlockDetected (chaque instance du script
+# vérifiait/créait le schéma au démarrage, et plusieurs instances exécutant
+# ce DDL en même temps sur les mêmes tables se bloquaient mutuellement), et
+# 2 par dépassement du timeout de 5h (tranches récentes, plus denses en
+# courses/données que les tranches 2014-2018).
+#
+# Corrigé le 18/08/2026 dans backfill_resultats.py par un flag optionnel
 # SKIP_INIT_SCHEMA (n'affecte ni la collecte quotidienne ni un backfill
-# normal, qui ne définissent jamais cette variable).
+# normal, qui ne définissent jamais cette variable) — résout le deadlock.
 #
-# Run #3 (18/08/2026) a relancé ces 7 tranches avec le correctif : succès,
-# 7/7, vérifié en base (couverture complète, aucune erreur).
+# Run #3 (18/08/2026) a relancé les 7 tranches initialement identifiées
+# comme échouées : succès, 7/7, vérifié en base.
 #
-# En relisant le détail complet des annotations de run #2 (une fois celui-ci
-# terminé), il s'est avéré que 21 tranches avaient échoué au total, pas
-# seulement les 7 initialement visibles (le run n'était pas encore terminé
-# au moment du premier diagnostic). 14 tranches supplémentaires n'ont donc
-# jamais été relancées avec le correctif : 12 totalement vides en base, et 2
-# ayant échoué par dépassement du timeout de 5h (dont une avec couverture
-# partielle : 84/90 jours). Ce fichier est mis à jour le 19/08/2026 pour
-# relancer CES 14 tranches, toujours avec SKIP_INIT_SCHEMA, sans toucher au
-# reste du pipeline. L'insertion est idempotente (commit par course, ON
-# CONFLICT DO NOTHING), donc relancer une tranche déjà partiellement remplie
-# ne crée aucun doublon.
+# En relisant le détail complet des annotations de run #2 une fois celui-ci
+# terminé, 14 tranches supplémentaires se sont avérées avoir échoué (21 au
+# total, pas seulement 7 — le run n'était pas terminé au moment du premier
+# diagnostic). Run #4 (19/08/2026) a tenté de relancer ces 14 tranches avec
+# SKIP_INIT_SCHEMA, mais a été annulé avant exécution : 2 de ces 14 tranches
+# (2024-08-06→2024-11-03 et 2025-10-30→2026-01-27) avaient déjà frôlé ou
+# dépassé le timeout de 5h lors de leur échec dans run #2, pour la même
+# raison (années récentes plus denses). Les relancer telles quelles aurait
+# probablement reproduit le même échec.
+#
+# Ce fichier (19/08/2026) résout ce risque en découpant CES 2 tranches
+# spécifiques en 4 sous-tranches de 45 jours chacune (au lieu de 90), ce qui
+# divise leur temps d'exécution par ~2 et les remet largement sous le
+# timeout de 5h. Les 12 autres tranches (deadlock uniquement, pas de
+# problème de timeout) restent en tranches de 90 jours inchangées. Total :
+# 16 tranches. Aucun autre changement au pipeline. L'insertion reste
+# idempotente (commit par course, ON CONFLICT DO NOTHING), donc relancer une
+# tranche déjà partiellement remplie ne crée aucun doublon.
 #
 # Réutilise exactement backfill_resultats.py (avec le correctif de
 # concurrence ci-dessus) sans aucune autre modification : même script, même
@@ -73,6 +83,8 @@ jobs:
           - date_debut: "2024-05-08"
             date_fin: "2024-08-05"
           - date_debut: "2024-08-06"
+            date_fin: "2024-09-19"
+          - date_debut: "2024-09-20"
             date_fin: "2024-11-03"
           - date_debut: "2024-11-04"
             date_fin: "2025-02-01"
@@ -81,6 +93,8 @@ jobs:
           - date_debut: "2025-08-01"
             date_fin: "2025-10-29"
           - date_debut: "2025-10-30"
+            date_fin: "2025-12-13"
+          - date_debut: "2025-12-14"
             date_fin: "2026-01-27"
           - date_debut: "2026-01-28"
             date_fin: "2026-04-27"
