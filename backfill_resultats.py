@@ -21,15 +21,15 @@ doublons (ON CONFLICT DO NOTHING) si interrompu en cours de route.
 Résilience (ajoutée le 16/08/2026 après un run planté avec
 psycopg2.errors.NumericValueOutOfRange sur une valeur non identifiée avec
 certitude dans le JSON du 22/07/2026) :
-  - chaque course est insérée dans sa PROPRE transaction (commit après
-    chaque course, pas seulement en fin de journée) — une course
-    problématique ne doit jamais faire perdre les courses déjà traitées
-    ce jour-là, ni interrompre le reste du backfill (même principe que la
-    discussion du bug de collecte des stats jockeys du 14/08/2026) ;
-  - tout champ destiné à une colonne PostgreSQL `integer` passe par
-    _safe_int(), qui renvoie None (au lieu de laisser planter l'insertion)
-    si la valeur brute de l'API PMU dépasse la plage int4
-    (-2147483648 à 2147483647) ou n'est pas un entier valide.
+- chaque course est insérée dans sa PROPRE transaction (commit après
+  chaque course, pas seulement en fin de journée) — une course
+  problématique ne doit jamais faire perdre les courses déjà traitées
+  ce jour-là, ni interrompre le reste du backfill (même principe que la
+  discussion du bug de collecte des stats jockeys du 14/08/2026) ;
+- tout champ destiné à une colonne PostgreSQL `integer` passe par
+  _safe_int(), qui renvoie None (au lieu de laisser planter l'insertion)
+  si la valeur brute de l'API PMU dépasse la plage int4
+  (-2147483648 à 2147483647) ou n'est pas un entier valide.
 
 Concurrence (ajoutée le 18/08/2026 après le backfill historique massif en
 jobs parallèles) : lorsque plusieurs instances de ce script tournent en même
@@ -43,6 +43,29 @@ vérification. Elle n'est définie par AUCUN des workflows existants
 comportement est donc strictement inchangé, init_schema() continue de
 s'exécuter pour eux exactement comme avant. Seul le backfill massif en
 parallèle (backfill-historique-massif.yml) la définit.
+
+Résilience connexion (ajoutée le 19/08/2026 après un incident survenu
+pendant le backfill historique massif : sur plusieurs jobs de plusieurs
+heures, la connexion Postgres (Supabase) est passée en lecture seule en
+cours de route (psycopg2.errors.ReadOnlySqlTransaction), très probablement
+un incident transitoire côté infrastructure (bascule/redémarrage) plutôt
+qu'un problème de nos données. Deux conséquences avant le correctif :
+1) chaque course suivante échouait silencieusement (rattrapée par le
+   try/except par course, donc sans planter le script, mais sans plus
+   écrire une seule ligne en base non plus) ; 2) le script finissait par
+   planter à l'appel _log() en fin de journée (seul point non protégé),
+   perdant ainsi tout le travail restant du job. Corrigé par :
+- une détection explicite des erreurs de connexion/transaction (au lieu de
+  les traiter comme une simple course en échec) qui interrompt le jour en
+  cours immédiatement plutôt que de perdre toutes les courses restantes en
+  silence ;
+- main() retente désormais le jour en échec jusqu'à 4 fois avec une
+  reconnexion complète (nouvelle connexion psycopg2) et un backoff
+  croissant entre chaque tentative, avant d'abandonner ce jour précis et de
+  continuer avec le suivant (jamais tout le script) ;
+- _log() est maintenant best-effort : si l'écriture du journal échoue
+  elle-même, le message est affiché sur stdout au lieu de laisser
+  planter tout le run pour la perte d'une simple ligne de diagnostic.
 """
 import json
 import os
@@ -62,6 +85,12 @@ STATUTS_A_IGNORER = {"COURSE_ANNULEE"}
 
 INT4_MIN = -2147483648
 INT4_MAX = 2147483647
+
+# Erreurs indiquant que la connexion/transaction elle-même est cassée
+# (par opposition à une donnée PMU inattendue sur une course précise) :
+# inutile de continuer à boucler sur les courses restantes du jour, elles
+# échoueraient toutes de la même façon jusqu'à reconnexion.
+ERREURS_CONNEXION = (psycopg2.OperationalError, psycopg2.InterfaceError, psycopg2.errors.ReadOnlySqlTransaction)
 
 
 def get_connection():
@@ -117,7 +146,12 @@ def backfill_jour(conn, date_str_ddmmyyyy):
     courses effectivement insérées (avec au moins un partant classé).
     Chaque course est commitée individuellement : un problème sur une
     course (donnée PMU inattendue, erreur réseau) ne fait perdre que
-    cette course, jamais les autres déjà traitées le même jour."""
+    cette course, jamais les autres déjà traitées le même jour.
+
+    Si la connexion/transaction elle-même est cassée (ex: bascule en
+    lecture seule côté Supabase), la fonction lève l'exception au lieu de
+    continuer à boucler : c'est à l'appelant (main()) de reconnecter et de
+    retenter le jour entier."""
     try:
         programme = _http_get_json(f"{PROGRAMME_BASE}/{date_str_ddmmyyyy}")
     except Exception as e:
@@ -224,6 +258,18 @@ def backfill_jour(conn, date_str_ddmmyyyy):
                         )
                 conn.commit()
                 n_courses += 1
+            except ERREURS_CONNEXION as e:
+                # Connexion/transaction cassée (ex: bascule en lecture seule
+                # côté Supabase) : continuer à boucler sur les courses
+                # restantes ne ferait que toutes les perdre en silence
+                # jusqu'à la fin de la journée. On abandonne ce jour tout de
+                # suite et on laisse main() reconnecter et retenter.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                print(f"  [CONNEXION PERDUE] {date_iso} R{r_num}/C{c_num} {hippodrome} : {type(e).__name__}: {e} — abandon du jour, nouvelle tentative programmée.")
+                raise
             except Exception as e:
                 conn.rollback()
                 n_echecs += 1
@@ -237,17 +283,28 @@ def backfill_jour(conn, date_str_ddmmyyyy):
 
 
 def _log(conn, date_str, n, statut, message):
-    with conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO resultats_log (date_execution, date_cible, nb_courses_recuperees, statut, message)
-               VALUES (%s,%s,%s,%s,%s)""",
-            (datetime.utcnow().isoformat(), date_str, n, statut, message),
-        )
+    """Journalise le résultat du jour. Best-effort (ajouté le 19/08/2026) :
+    si l'écriture du log échoue elle-même (ex: connexion en lecture seule),
+    on affiche le message sur stdout au lieu de laisser planter tout le
+    script pour la perte d'une simple ligne de diagnostic."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO resultats_log (date_execution, date_cible, nb_courses_recuperees, statut, message)
+                   VALUES (%s,%s,%s,%s,%s)""",
+                (datetime.utcnow().isoformat(), date_str, n, statut, message),
+            )
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"  [LOG NON ÉCRIT] {date_str} : {statut} — {message} (cause : {type(e).__name__}: {e})")
 
 
 def main():
     date_debut_str = os.environ.get("DATE_DEBUT")  # format attendu: YYYY-MM-DD
-    date_fin_str = os.environ.get("DATE_FIN")      # format attendu: YYYY-MM-DD
+    date_fin_str = os.environ.get("DATE_FIN")  # format attendu: YYYY-MM-DD
 
     if not date_debut_str or not date_fin_str:
         # Pas de période fournie = usage "collecte quotidienne" : on récupère
@@ -273,7 +330,31 @@ def main():
     d = date_debut
     while d <= date_fin:
         date_str_ddmmyyyy = d.strftime("%d%m%Y")
-        n = backfill_jour(conn, date_str_ddmmyyyy)
+        # Résilience connexion (19/08/2026) : on retente le jour en cours
+        # jusqu'à 4 fois avec reconnexion complète entre chaque tentative,
+        # au lieu de laisser une erreur de connexion (ex: bascule en
+        # lecture seule côté Supabase) planter tout le script et perdre
+        # tous les jours restants de la tranche. ON CONFLICT DO NOTHING
+        # protège contre les doublons sur les courses déjà insérées avant
+        # l'incident.
+        n = None
+        backoffs = (5, 15, 45)
+        for tentative in range(1, 5):
+            try:
+                n = backfill_jour(conn, date_str_ddmmyyyy)
+                break
+            except Exception as e:
+                print(f"  [ECHEC JOUR] {d.isoformat()} tentative {tentative}/4 : {type(e).__name__}: {e}")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                if tentative < 4:
+                    time.sleep(backoffs[tentative - 1])
+                    conn = get_connection()
+        if n is None:
+            print(f"  [JOUR ABANDONNÉ] {d.isoformat()} après 4 tentatives — passage au jour suivant (à retenter séparément).")
+            n = 0
         total += n
         print(f"{d.isoformat()} : {n} course(s)")
         d += timedelta(days=1)
