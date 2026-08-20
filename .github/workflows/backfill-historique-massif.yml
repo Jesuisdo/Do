@@ -11,46 +11,31 @@
 # ce n'est PAS une limite de la source : c'est simplement qu'aucun backfill
 # n'avait encore été lancé plus loin dans le passé.
 #
-# Run #2 (17-18/08/2026) a couvert les 51 tranches de 90 jours de la période
-# 2014-01-01 → 2026-07-20 en jobs parallèles (matrix, max-parallel: 4). 21 de
-# ces 51 tranches ont finalement échoué : la majorité (19) avec
-# psycopg2.errors.DeadlockDetected (chaque instance du script
-# vérifiait/créait le schéma au démarrage, et plusieurs instances exécutant
-# ce DDL en même temps sur les mêmes tables se bloquaient mutuellement), et
-# 2 par dépassement du timeout de 5h (tranches récentes, plus denses en
-# courses/données que les tranches 2014-2018).
+# Historique des runs :
+# - Run #2 (17-18/08) : 51 tranches, 21 échecs (19 deadlock schéma, 2
+#   timeout 5h). Corrigé par SKIP_INIT_SCHEMA dans backfill_resultats.py.
+# - Run #3 (18/08) : retry des 7 premières tranches identifiées : succès.
+# - Run #4 : annulé avant exécution (2 tranches à risque de timeout repérées
+#   dans les 14 restantes).
+# - Run #5 (19/08) : les 14 tranches restantes, dont 2 découpées en
+#   sous-tranches de 45 jours pour éviter le timeout. Résultat : 9 succès,
+#   1 timeout (2022-08-17→2022-11-14, tranche NON découpée car pas
+#   identifiée à risque au départ), 6 échecs par
+#   psycopg2.errors.ReadOnlySqlTransaction — la connexion Postgres
+#   (Supabase) est passée en lecture seule en cours de route sur plusieurs
+#   jobs de plusieurs heures (incident transitoire probable côté
+#   infrastructure). Avant correctif, ceci faisait perdre silencieusement
+#   toutes les courses restantes du run puis plantait au premier _log().
+#   Corrigé le 19/08/2026 dans backfill_resultats.py : détection explicite
+#   des erreurs de connexion (au lieu de les traiter comme un échec de
+#   course ordinaire), retry du jour en cours jusqu'à 4 fois avec
+#   reconnexion complète, et _log() rendu best-effort.
 #
-# Corrigé le 18/08/2026 dans backfill_resultats.py par un flag optionnel
-# SKIP_INIT_SCHEMA (n'affecte ni la collecte quotidienne ni un backfill
-# normal, qui ne définissent jamais cette variable) — résout le deadlock.
-#
-# Run #3 (18/08/2026) a relancé les 7 tranches initialement identifiées
-# comme échouées : succès, 7/7, vérifié en base.
-#
-# En relisant le détail complet des annotations de run #2 une fois celui-ci
-# terminé, 14 tranches supplémentaires se sont avérées avoir échoué (21 au
-# total, pas seulement 7 — le run n'était pas terminé au moment du premier
-# diagnostic). Run #4 (19/08/2026) a tenté de relancer ces 14 tranches avec
-# SKIP_INIT_SCHEMA, mais a été annulé avant exécution : 2 de ces 14 tranches
-# (2024-08-06→2024-11-03 et 2025-10-30→2026-01-27) avaient déjà frôlé ou
-# dépassé le timeout de 5h lors de leur échec dans run #2, pour la même
-# raison (années récentes plus denses). Les relancer telles quelles aurait
-# probablement reproduit le même échec.
-#
-# Ce fichier (19/08/2026) résout ce risque en découpant CES 2 tranches
-# spécifiques en 4 sous-tranches de 45 jours chacune (au lieu de 90), ce qui
-# divise leur temps d'exécution par ~2 et les remet largement sous le
-# timeout de 5h. Les 12 autres tranches (deadlock uniquement, pas de
-# problème de timeout) restent en tranches de 90 jours inchangées. Total :
-# 16 tranches. Aucun autre changement au pipeline. L'insertion reste
-# idempotente (commit par course, ON CONFLICT DO NOTHING), donc relancer une
-# tranche déjà partiellement remplie ne crée aucun doublon.
-#
-# Réutilise exactement backfill_resultats.py (avec le correctif de
-# concurrence ci-dessus) sans aucune autre modification : même script, même
-# base, mêmes tables, même logique de résilience par course (commit
-# individuel, ON CONFLICT DO NOTHING, donc relançable sans risque de
-# doublons).
+# Ce fichier (19/08/2026) est réduit aux 7 tranches encore en échec après
+# run #5 (les 9 autres de run #5 ont réussi, inutile de les refaire).
+# Aucun autre changement au pipeline. L'insertion reste idempotente (commit
+# par course, ON CONFLICT DO NOTHING), donc relancer une tranche déjà
+# partiellement remplie ne crée aucun doublon.
 
 name: Backfill historique massif (2014-2026)
 
@@ -66,26 +51,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - date_debut: "2022-02-18"
-            date_fin: "2022-05-18"
-          - date_debut: "2022-05-19"
-            date_fin: "2022-08-16"
           - date_debut: "2022-08-17"
             date_fin: "2022-11-14"
-          - date_debut: "2022-11-15"
-            date_fin: "2023-02-12"
-          - date_debut: "2023-02-13"
-            date_fin: "2023-05-13"
-          - date_debut: "2023-08-12"
-            date_fin: "2023-11-09"
-          - date_debut: "2023-11-10"
-            date_fin: "2024-02-07"
-          - date_debut: "2024-05-08"
-            date_fin: "2024-08-05"
-          - date_debut: "2024-08-06"
-            date_fin: "2024-09-19"
-          - date_debut: "2024-09-20"
-            date_fin: "2024-11-03"
           - date_debut: "2024-11-04"
             date_fin: "2025-02-01"
           - date_debut: "2025-02-02"
