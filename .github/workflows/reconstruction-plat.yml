@@ -1,0 +1,139 @@
+# Reconstruction historique PLAT (Plan B) — 02/01/2014 -> 18/08/2026
+#
+# Contexte : l'ancienne base Supabase (yervfludrluraioefuox) est
+# inaccessible suite à un incident disque plein, et ne dispose d'aucun
+# backup exploitable côté Supabase (confirmé via la documentation
+# officielle : pas de PITR ni de backup quotidien sur le plan gratuit).
+# Ce workflow reconstruit l'intégralité de l'historique PLAT directement
+# depuis l'API source PMU (offline.turfinfo.api.pmu.fr), sans dépendre de
+# l'ancienne base à aucun moment.
+#
+# Déclenchement MANUEL uniquement (workflow_dispatch) : une reconstruction
+# complète représente ~88 000 appels API et doit rester une décision
+# consciente, jamais une tâche automatique récurrente.
+#
+# Sécurité / isolation :
+# - DATABASE_URL_PLAT doit pointer EXCLUSIVEMENT vers la nouvelle base
+#   PLAT (jvfrvttfedmabnoldbyp). Ce workflow n'utilise NULLE PART le
+#   secret de l'ancienne base et ne fait aucun appel réseau vers
+#   supabase.com autre que via cette variable.
+# - SKIP_INIT_SCHEMA=true partout : le schéma de la nouvelle base a déjà
+#   été appliqué manuellement (migration schema_initial_plat) et validé ;
+#   on ne relance jamais de DDL depuis ce workflow.
+#
+# Structure :
+#   1. reconstruction : 20 jobs en parallèle, un par tranche de ~230
+#      jours, chacun avec ses propres retries internes (4 tentatives par
+#      jour avec reconnexion, déjà intégré au script).
+#   2. combler-les-trous : après la matrice, détecte les jours qui
+#      n'ont aucune entrée resultats_log statut='OK' et les relance
+#      individuellement.
+#   3. rapport-final : produit le rapport obligatoire (courses, partants,
+#      couverture, doublons, erreurs, taille de base) dans le résumé du
+#      run GitHub Actions.
+
+name: Reconstruction historique PLAT (Plan B)
+
+on:
+  workflow_dispatch: {}
+
+env:
+  DATE_DEBUT_GLOBAL: "2014-01-02"
+  DATE_FIN_GLOBAL: "2026-08-18"
+
+jobs:
+  reconstruction:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 20
+      fail-fast: false
+      matrix:
+        include:
+          - debut: "2014-01-02"
+            fin: "2014-08-20"
+          - debut: "2014-08-21"
+            fin: "2015-04-08"
+          - debut: "2015-04-09"
+            fin: "2015-11-25"
+          - debut: "2015-11-26"
+            fin: "2016-07-13"
+          - debut: "2016-07-14"
+            fin: "2017-03-01"
+          - debut: "2017-03-02"
+            fin: "2017-10-18"
+          - debut: "2017-10-19"
+            fin: "2018-06-06"
+          - debut: "2018-06-07"
+            fin: "2019-01-23"
+          - debut: "2019-01-24"
+            fin: "2019-09-11"
+          - debut: "2019-09-12"
+            fin: "2020-04-29"
+          - debut: "2020-04-30"
+            fin: "2020-12-16"
+          - debut: "2020-12-17"
+            fin: "2021-08-04"
+          - debut: "2021-08-05"
+            fin: "2022-03-22"
+          - debut: "2022-03-23"
+            fin: "2022-11-07"
+          - debut: "2022-11-08"
+            fin: "2023-06-25"
+          - debut: "2023-06-26"
+            fin: "2024-02-10"
+          - debut: "2024-02-11"
+            fin: "2024-09-27"
+          - debut: "2024-09-28"
+            fin: "2025-05-15"
+          - debut: "2025-05-16"
+            fin: "2025-12-31"
+          - debut: "2026-01-01"
+            fin: "2026-08-18"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install psycopg2-binary
+      - name: Reconstruction ${{ matrix.debut }} -> ${{ matrix.fin }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          DATE_DEBUT: ${{ matrix.debut }}
+          DATE_FIN: ${{ matrix.fin }}
+          SKIP_INIT_SCHEMA: "true"
+        run: python backfill_resultats_plat_reconstruction.py
+
+  combler-les-trous:
+    needs: reconstruction
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install psycopg2-binary
+      - name: Détection et relance des jours manquants
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          DATE_DEBUT: ${{ env.DATE_DEBUT_GLOBAL }}
+          DATE_FIN: ${{ env.DATE_FIN_GLOBAL }}
+          SKIP_INIT_SCHEMA: "true"
+        run: python gap_check_and_fill.py
+
+  rapport-final:
+    needs: combler-les-trous
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install psycopg2-binary
+      - name: Rapport final obligatoire
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          DATE_DEBUT: ${{ env.DATE_DEBUT_GLOBAL }}
+          DATE_FIN: ${{ env.DATE_FIN_GLOBAL }}
+        run: python generate_report.py
