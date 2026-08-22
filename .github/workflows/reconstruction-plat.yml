@@ -45,7 +45,7 @@ jobs:
   reconstruction:
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 20
+      max-parallel: 8
       fail-fast: false
       matrix:
         include:
