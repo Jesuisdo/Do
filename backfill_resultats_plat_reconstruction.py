@@ -375,7 +375,7 @@ def main():
                     time.sleep(backoffs[tentative - 1])
                     conn = get_connection()
         if n is None:
-            print(f"  [JOUR ABANDONNÉ] {d.isoformat()} après 4 tentatives — passage au jour suivant (à retenter séparément)."
+            print(f"  [JOUR ABANDONNÉ] {d.isoformat()} après 4 tentatives — passage au jour suivant (à retenter séparément).")
             n = 0
         total += n
         print(f"{d.isoformat()} : {n} course(s)")
