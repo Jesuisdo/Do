@@ -19,4 +19,4 @@ jobs:
 
       - run: python3 collect_live_odds_render.py
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
