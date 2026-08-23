@@ -1,4 +1,4 @@
-name: Collecte résultats quotidienne
+name: Collecte resultats quotidienne
 
 on:
   schedule:
@@ -14,6 +14,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: python3 backfill_resultats.py
+      - run: python3 backfill_resultats_plat_reconstruction.py
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          SKIP_INIT_SCHEMA: "true"
