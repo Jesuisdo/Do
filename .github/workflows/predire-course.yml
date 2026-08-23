@@ -35,7 +35,7 @@ jobs:
 
       - run: python3 predict_course.py
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
           DATE_CIBLE: ${{ github.event.inputs.date_ddmmyyyy }}
           R_NUM: ${{ github.event.inputs.r_num }}
           C_NUM: ${{ github.event.inputs.c_num }}
