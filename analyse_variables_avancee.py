@@ -79,7 +79,6 @@ SELECT
     rp.nom_jockey, rp.nom_entraineur, rp.musique, rp.gains,
     rp.gains_annee_encours, rp.gains_annee_precedente,
     rp.nombre_courses, rp.nombre_victoires, rp.nombre_places,
-    rp.nombre_places_second, rp.nombre_places_troisieme,
     rp.handicap_poids, rp.poids_condition_monte, rp.place_corde,
     rp.oeilleres, rp.deferre, rp.position_arrivee,
     rp.commentaire_apres_course
