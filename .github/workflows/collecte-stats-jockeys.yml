@@ -40,4 +40,4 @@ jobs:
 
       - run: python3 collect_stats_jockeys.py
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
