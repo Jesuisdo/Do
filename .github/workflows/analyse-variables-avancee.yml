@@ -23,4 +23,4 @@ jobs:
 
       - run: python3 entrainer_et_evaluer.py
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
