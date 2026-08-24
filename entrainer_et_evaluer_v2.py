@@ -33,6 +33,7 @@ et documentée dans le rapport (section "problèmes de données").
 import os
 import sys
 import json
+import gc
 import random
 from datetime import datetime
 from collections import Counter
@@ -174,7 +175,10 @@ def preparer_matrice(df, colonnes_dummies_reference=None):
     cat_df = pd.concat(
         [pd.get_dummies(cat_capee[col], prefix=col) for col in VARIABLES_CATEGORIELLES], axis=1
     )
-    X = pd.concat([df[VARIABLES_NUMERIQUES].reset_index(drop=True), cat_df.reset_index(drop=True)], axis=1)
+    # float32 (pas float64) pour la partie numerique : divise par ~2 la memoire
+    # des grandes matrices X_*, sans consequence sur la precision des AUC/rangs.
+    num_df = df[VARIABLES_NUMERIQUES].reset_index(drop=True).astype("float32")
+    X = pd.concat([num_df, cat_df.reset_index(drop=True)], axis=1)
     if colonnes_dummies_reference is not None:
         X = X.reindex(columns=colonnes_dummies_reference, fill_value=0)
     return X
@@ -206,11 +210,25 @@ def main():
     log(f"  {rapport_identite['n_noms_avec_collision']} noms ({rapport_identite['pct_noms_avec_collision']}%) "
         f"portes par PLUSIEURS chevaux differents dans nos donnees (collision detectee et separee).")
 
+    # calcule maintenant (pendant que 'lignes' brutes existent encore) ce dont la
+    # section 9/10 du rapport aura besoin plus tard, pour pouvoir liberer 'lignes'
+    # juste apres — cf. note memoire ci-dessous.
+    id_cheval_present = sum(1 for l in lignes if l.get("id_cheval"))
+    n_lignes_brutes = len(lignes)
+
     log("\n[3/8] Construction des variables point-in-time (aucune fuite du futur, teste unitairement)...")
     lignes_triees = trier_chronologiquement(lignes)
     features = construire_variables(lignes_triees)
     df = pd.DataFrame(features)
     log(f"  {len(df)} lignes de features construites, {df['course_id'].nunique()} courses.")
+
+    # Memoire : 'lignes'/'lignes_triees'/'features' sont des listes de ~1M dicts
+    # Python (tres couteux en RAM, largement plus que les DataFrame equivalents).
+    # Elles ne servent plus a rien une fois 'df' construit (tout ce qui est
+    # necessaire au rapport en a deja ete extrait ci-dessus) : on les libere
+    # explicitement pour rester sous la limite memoire du runner GitHub Actions.
+    del lignes, lignes_triees, features, horse_uids
+    gc.collect()
 
     df = df[df["position_arrivee"].notna()].copy()
     df = df[df["nb_partants_reel"] >= 3].reset_index(drop=True)
@@ -258,6 +276,12 @@ def main():
     else:
         log("Aucune variable numerique n'est quasi-vide.")
 
+    # 'df' (non-decoupe) ne sert plus a rien une fois df_train/df_val/df_test
+    # construits et la couverture mesuree — le liberer avant de construire les
+    # matrices d'entrainement (autre gros poste memoire).
+    del df
+    gc.collect()
+
     # --- matrices ---
     X_train = preparer_matrice(df_train)
     colonnes_ref = X_train.columns
@@ -266,6 +290,12 @@ def main():
     y_train_place = df_train["cible_place"].values
     y_val_place = df_val["cible_place"].values
     y_test_place = df_test["cible_place"].values
+
+    # df_train/df_val (DataFrame "large", ~118 colonnes brutes) ne servent plus
+    # a rien une fois les matrices X_train/X_val et les cibles y_* extraites —
+    # df_test, plus petit, est conserve car reutilise section 5 a 8.
+    del df_train, df_val
+    gc.collect()
 
     log(f"\nMatrice finale (apres expansion categorielle, cap {CAP_CARDINALITE_CATEGORIELLE}+AUTRE) : {X_train.shape[1]} colonnes.")
 
@@ -306,6 +336,11 @@ def main():
     gbm_final = HistGradientBoostingClassifier(random_state=RANDOM_SEED, **meilleurs_params)
     gbm_final.fit(X_trainval_ctrl, y_trainval_place)
     proba_gbm_test = gbm_final.predict_proba(X_test_ctrl)[:, 1]
+    # X_trainval_ctrl (fusion temporaire train+validation) et les 3 modeles GBM
+    # non retenus de la grille ne servent plus a rien — liberes avant la section
+    # L1 (qui construit elle-meme plusieurs grandes matrices supplementaires).
+    del X_trainval_ctrl, X_train_ctrl, X_val_ctrl, meilleur_gbm
+    gc.collect()
 
     # =========================================================================
     # MODELE 2 : Regression logistique L1 — C choisi sur VALIDATION (pas sur TEST,
@@ -318,12 +353,20 @@ def main():
         f"dans le rapport pour la justification de ce compromis).")
     imputer = SimpleImputer(strategy="median")
     scaler = StandardScaler()
-    X_train_imp = pd.DataFrame(imputer.fit_transform(X_train), columns=X_train.columns)
-    X_val_imp = pd.DataFrame(imputer.transform(X_val), columns=X_train.columns)
-    X_test_imp = pd.DataFrame(imputer.transform(X_test), columns=X_train.columns)
-    X_train_sc = pd.DataFrame(scaler.fit_transform(X_train_imp), columns=X_train.columns)
-    X_val_sc = pd.DataFrame(scaler.transform(X_val_imp), columns=X_train.columns)
-    X_test_sc = pd.DataFrame(scaler.transform(X_test_imp), columns=X_train.columns)
+    # Chaque _imp est immediatement consomme par le scaler puis libere : evite
+    # de garder 6 grandes matrices (3 imputees + 3 mises a l'echelle) vivantes
+    # simultanement. float32 (au lieu du float64 par defaut de sklearn) divise
+    # par ~2 la memoire de chacune.
+    X_train_imp = imputer.fit_transform(X_train).astype("float32")
+    X_train_sc = pd.DataFrame(scaler.fit_transform(X_train_imp), columns=X_train.columns, dtype="float32")
+    del X_train_imp
+    X_val_imp = imputer.transform(X_val).astype("float32")
+    X_val_sc = pd.DataFrame(scaler.transform(X_val_imp), columns=X_train.columns, dtype="float32")
+    del X_val_imp
+    X_test_imp = imputer.transform(X_test).astype("float32")
+    X_test_sc = pd.DataFrame(scaler.transform(X_test_imp), columns=X_train.columns, dtype="float32")
+    del X_test_imp
+    gc.collect()
 
     if len(X_train_sc) > SOUS_ECHANTILLON_L1:
         idx_sous = pd.Series(y_train_place).groupby(y_train_place).apply(
@@ -358,6 +401,11 @@ def main():
     if len(selectionnees_l1) > 40:
         log(f"  ... et {len(selectionnees_l1) - 40} autres.")
 
+    # X_train_sc/X_val_sc/X_train_sc_l1 (matrices mises a l'echelle pour la
+    # regression L1) ne servent plus a rien une fois le meilleur modele choisi.
+    del X_train_sc, X_val_sc, X_test_sc, X_train_sc_l1, X_train, X_val, X_test
+    gc.collect()
+
     # =========================================================================
     # Importance par permutation (GBM final, sur un sous-echantillon de TEST
     # pour rester dans un temps de calcul raisonnable — les metriques de
@@ -365,9 +413,12 @@ def main():
     # =========================================================================
     log("\nCalcul de l'importance par permutation (GBM, sous-echantillon de TEST)...")
     idx_perm = X_test_ctrl.sample(min(len(X_test_ctrl), SOUS_ECHANTILLON_PERMUTATION), random_state=RANDOM_SEED).index
+    # n_jobs=1 (pas -1) : evite que joblib duplique la matrice/le modele en
+    # memoire dans plusieurs processus paralleles — risque d'OOM sur le runner
+    # GitHub Actions, pour un gain de temps marginal ici (echantillon deja reduit).
     perm = permutation_importance(
         gbm_final, X_test_ctrl.loc[idx_perm], y_test_place[idx_perm],
-        scoring="roc_auc", n_repeats=5, random_state=RANDOM_SEED, n_jobs=-1,
+        scoring="roc_auc", n_repeats=5, random_state=RANDOM_SEED, n_jobs=1,
     )
     importances = pd.Series(perm.importances_mean, index=X_test_ctrl.columns).sort_values(ascending=False)
     seuil_bruit = importances.get("temoin_aleatoire", 0.0)
@@ -475,9 +526,8 @@ def main():
     log("  Echantillon de collisions detectees (jusqu'a 25) :")
     for c in rapport_identite["echantillon_collisions"][:15]:
         log(f"    {c['nom']}: {c['n_clusters']} chevaux distincts sur {c['n_lignes_total']} lignes -> {c['detail']}")
-    id_cheval_present = sum(1 for l in lignes if l.get("id_cheval"))
-    log(f"  id_cheval PMU present sur {id_cheval_present}/{len(lignes)} lignes "
-        f"({round(100*id_cheval_present/len(lignes),1)}%) — utilise en priorite quand disponible et coherent, "
+    log(f"  id_cheval PMU present sur {id_cheval_present}/{n_lignes_brutes} lignes "
+        f"({round(100*id_cheval_present/n_lignes_brutes,1)}%) — utilise en priorite quand disponible et coherent, "
         "heuristique nom+pere+mere+trajectoire d'age utilisee pour le reste (voir identite_chevaux.py).")
 
     log("\n=== 10. PROBLEMES DE DONNEES RENCONTRES (liste honnete) ===")
@@ -488,7 +538,7 @@ def main():
         "VIDES sur la nouvelle base PLAT (non re-scrapees depuis la reconstruction). Ce script ne "
         "depend donc PAS de ces tables : il recalcule des statistiques jockey/entraineur/proprietaire/"
         "eleveur en interne, point-in-time, a partir de resultats_partants uniquement.")
-    log(f"  - {round(100*n_sans_position/len(lignes),1)}% des lignes partant n'ont pas de position "
+    log(f"  - {round(100*n_sans_position/n_lignes_brutes,1)}% des lignes partant n'ont pas de position "
         "d'arrivee connue (non partant, disqualifie, etc.) et sont exclues du jeu d'entrainement/test "
         "ET de la construction de l'historique interne — legere sous-estimation possible des compteurs "
         "'nombre de courses' internes.")
