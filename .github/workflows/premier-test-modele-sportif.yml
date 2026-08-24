@@ -1,0 +1,32 @@
+name: Premier test du modele sportif (variables historiques v2)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  entrainement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install psycopg2-binary pandas numpy scikit-learn
+      - name: Entrainer et evaluer hors echantillon
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+        run: |
+          python3 entrainer_et_evaluer_v2.py 2>&1 | tee rapport_modele_v2.txt
+          {
+            echo "## Rapport complet - premier test du modele sportif pur"
+            echo '```'
+            cat rapport_modele_v2.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload du rapport complet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-modele-v2
+          path: rapport_modele_v2.txt
