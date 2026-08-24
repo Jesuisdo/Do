@@ -16,8 +16,8 @@ jobs:
         run: pip install psycopg2-binary pandas numpy scikit-learn
       - name: Lancer l'analyse d'erreurs et les ameliorations ciblees
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python entrainer_et_evaluer_v3.py | tee rapport_modele_v3.txt
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+        run: set -o pipefail; python entrainer_et_evaluer_v3.py | tee rapport_modele_v3.txt
       - name: Ajouter le rapport au resume du run
         if: always()
         run: |
