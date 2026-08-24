@@ -1,0 +1,398 @@
+# -*- coding: utf-8 -*-
+"""
+v3_lib.py â Module partage entre entrainer_v3_phase1.py (etapes 1-6 :
+chargement, construction des variables, split, reproduction du modele v2)
+et entrainer_v3_phase2.py (etapes 7-9 : entrainement des modeles v3,
+comparaison finale). Contient TOUTE la logique commune (constantes,
+fonctions pandas pures, wrapper GBM) pour eviter la duplication et
+permettre de tester la logique une seule fois.
+
+Historique : entrainer_et_evaluer_v3.py (version monolithique) plantait a
+l'etape 7/9 apres ~8 minutes de calcul reel (chargement + construction des
+variables + reproduction du modele v2 + analyse d'erreurs v2, DEJA REUSSIS)
+a cause d'une colonne degeneree (voir colonnes_degenerees ci-dessous). Pour
+qu'une erreur future dans les etapes 7-9 n'oblige plus a refaire les etapes
+1-6, le pipeline est desormais scinde en deux scripts relies par un
+checkpoint (voir entrainer_v3_phase1.py / entrainer_v3_phase2.py et
+analyse-erreurs-v3.yml : job phase1 -> artefact -> job phase2).
+"""
+import os
+import random
+
+import numpy as np
+import pandas as pd
+
+try:
+    import psycopg2
+    import psycopg2.extras
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.metrics import roc_auc_score, log_loss
+    from sklearn.inspection import permutation_importance
+    DEPENDANCES_LOURDES_DISPONIBLES = True
+except ImportError:
+    # psycopg2/scikit-learn ne sont pas installables dans l'environnement de
+    # developpement local de ce projet (proxy sortant restreint) â ce module
+    # est concu pour tourner via GitHub Actions. En local, seule la logique
+    # pandas pure est testable â voir test_entrainer_et_evaluer_v3.py.
+    DEPENDANCES_LOURDES_DISPONIBLES = False
+
+from datetime import datetime
+
+pd.set_option("display.width", 200)
+pd.set_option("display.max_rows", 300)
+
+RANDOM_SEED = 42
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+CAP_CARDINALITE_CATEGORIELLE = 20
+SOUS_ECHANTILLON_PERMUTATION = 30_000
+
+# --- meilleurs hyperparametres GBM retenus par v2 (deja choisis sur
+# VALIDATION lors du run precedent) : reutilises tels quels pour reproduire
+# le modele v2 sans repeter la recherche de grille. ---
+MEILLEURS_PARAMS_GBM_V2 = {
+    "max_depth": 5, "max_iter": 200, "learning_rate": 0.05,
+    "l2_regularization": 1.0, "min_samples_leaf": 40,
+}
+
+GRILLE_GBM = [
+    {"max_depth": 4, "max_iter": 150, "learning_rate": 0.05, "l2_regularization": 1.0, "min_samples_leaf": 25},
+    {"max_depth": 5, "max_iter": 200, "learning_rate": 0.05, "l2_regularization": 1.0, "min_samples_leaf": 40},
+    {"max_depth": 3, "max_iter": 250, "learning_rate": 0.03, "l2_regularization": 2.0, "min_samples_leaf": 60},
+]
+
+# --- variables cibles pour l'enrichissement "relatif au champ" (v3) ---
+# Choisies a partir de deux sources convergentes : (a) le top de
+# l'importance par permutation du rapport v2 et (b) les categories
+# explicitement demandees par Dorian (ecart d'allocation vs carriere,
+# musique, repos, corde, interactions jockey/entraineur â completees ici
+# par jockey/cheval et entraineur/cheval). Pour chacune, on ajoute son RANG
+# et son Z-SCORE intra-course (calcules uniquement a partir de valeurs deja
+# connues avant la course â aucune fuite).
+VARIABLES_RELATIVES_CIBLES = [
+    "allocation_delta_vs_carriere",
+    # "montant_allocation" retire (bug identifie le 24/08/2026) : c'est le
+    # montant total de la course, IDENTIQUE pour tous les partants d'une
+    # meme course -> ecart-type intra-course nul -> z-score = NaN partout
+    # et rang constant = 1 partout (colonne degeneree, faisait planter le
+    # binning HistGradientBoosting). "allocation_delta_vs_carriere"
+    # ci-dessus est la variable runner-level deja demandee par Dorian
+    # (ecart vs carriere), donc rien n'est perdu.
+    "musique_dernier",
+    "musique_moy3",
+    "jours_repos",
+    "place_corde",
+    "interne_jockey_entraineur_taux_victoire",
+    "interne_jockey_taux_top3",
+    "interne_entraineur_taux_top3",
+    "interne_jockey_cheval_taux_victoire",
+    "interne_entraineur_cheval_taux_victoire",
+    "carriere_taux_place",
+]
+
+
+def variables_numeriques_v3(variables_numeriques_base):
+    return (
+        list(variables_numeriques_base)
+        + [f"{v}_rang_course" for v in VARIABLES_RELATIVES_CIBLES]
+        + [f"{v}_z_course" for v in VARIABLES_RELATIVES_CIBLES]
+    )
+
+
+VARIABLES_PROFIL_GAGNANTS = [
+    "allocation_delta_vs_carriere", "allocation_delta_vs_carriere_rang_course",
+    "musique_dernier", "musique_dernier_rang_course",
+    "musique_moy3", "rang_papier_taux_victoire", "niveau_moyen_adversaires",
+    "jours_repos", "jours_repos_rang_course",
+    "place_corde", "place_corde_rang_course",
+    "interne_jockey_entraineur_taux_victoire", "interne_jockey_taux_top3",
+    "interne_entraineur_taux_top3", "carriere_taux_victoire",
+    "carriere_taux_place", "age", "nb_partants_reel", "gains_annee_encours",
+]
+
+REQUETE = """
+SELECT
+    rp.course_id, rc.date_course, rc.heure_depart, rc.hippodrome,
+    rc.distance_m, rc.montant_allocation, rc.meteo_temperature,
+    rc.meteo_force_vent, rc.terrain_intitule, rc.terrain_valeur_penetrometre,
+    rc.corde, rc.type_piste, rc.categorie_particularite, rc.condition_age,
+    rc.condition_sexe, rc.partants_declares, rc.specialite, rc.discipline,
+    rp.numero, rp.nom_cheval, rp.id_cheval, rp.nom_pere, rp.nom_mere,
+    rp.sexe, rp.age, rp.nom_jockey, rp.nom_entraineur, rp.musique,
+    rp.gains, rp.gains_annee_encours, rp.gains_annee_precedente,
+    rp.nombre_courses, rp.nombre_victoires, rp.nombre_places,
+    rp.handicap_poids, rp.poids_condition_monte, rp.place_corde,
+    rp.oeilleres, rp.deferre, rp.position_arrivee, rp.race, rp.pays,
+    rp.pays_entrainement, rp.proprietaire, rp.eleveur, rp.robe
+FROM resultats_partants rp
+JOIN resultats_courses rc ON rc.course_id = rp.course_id
+WHERE (rc.specialite = 'PLAT' OR rc.discipline = 'PLAT')
+ORDER BY rc.date_course ASC, COALESCE(rc.heure_depart,'00:00:00') ASC, rp.course_id ASC, rp.numero ASC;
+"""
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def charger_donnees_brutes():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL absente de l'environnement.")
+    conn = psycopg2.connect(DATABASE_URL)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(REQUETE)
+        lignes = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    for l in lignes:
+        if isinstance(l.get("date_course"), str):
+            l["date_course"] = datetime.strptime(l["date_course"], "%Y-%m-%d").date()
+    return lignes
+
+
+def bucket_partants(n):
+    if n <= 7:
+        return "petit (<=7)"
+    if n <= 12:
+        return "moyen (8-12)"
+    return "grand (13+)"
+
+
+def calculer_baseline_combine_v1(df):
+    """Identique a v2 : reproduit la regle de production pour comparaison."""
+    d = df.copy()
+    d["forme_norm"] = d["musique_dernier"].fillna(99)
+    d["rang_forme"] = d.groupby("course_id")["forme_norm"].rank(method="min", ascending=True)
+    d["rang_taux_victoire"] = d.groupby("course_id")["carriere_taux_victoire"].rank(method="min", ascending=False, na_option="bottom")
+    d["rang_gains"] = d.groupby("course_id")["gains_carriere"].rank(method="min", ascending=False, na_option="bottom")
+    jvp = d["interne_jockey_taux_victoire"].fillna(-1)
+    d["rang_jockey"] = jvp.groupby(d["course_id"]).rank(method="min", ascending=False)
+    d["score4"] = d["rang_forme"] + d["rang_taux_victoire"] + d["rang_gains"] + d["rang_jockey"]
+    d["rang_predit"] = d.groupby("course_id")["score4"].rank(method="min", ascending=True)
+    return d["rang_predit"]
+
+
+def taux_reussite_place(df, colonne_rang_predit):
+    d = df.copy()
+    d["est_pick"] = d[colonne_rang_predit] <= d["seuil"]
+    d["est_reussi"] = d["est_pick"] & (d["position_arrivee"] <= d["seuil"])
+    essais = int(d["est_pick"].sum())
+    reussis = int(d["est_reussi"].sum())
+    pct = round(100 * reussis / essais, 1) if essais else float("nan")
+    return essais, reussis, pct
+
+
+def taux_reussite_top1(df, colonne_rang_predit, cible_col):
+    d = df[df[colonne_rang_predit] == 1].copy()
+    n_courses = len(d)
+    n_reussis = int((d[cible_col] == 1).sum()) if cible_col == "est_gagnant" else int((d["position_arrivee"] <= d["seuil"]).sum())
+    pct = round(100 * n_reussis / n_courses, 1) if n_courses else float("nan")
+    return n_courses, n_reussis, pct
+
+
+def preparer_matrice(df, variables_numeriques, variables_categorielles, colonnes_dummies_reference=None):
+    """Version generalisee de preparer_matrice (v2) : accepte la liste de
+    variables numeriques ET categorielles en parametre, pour pouvoir
+    construire soit la matrice v2 (109 variables), soit la matrice v3
+    enrichie (109+22), a partir du meme DataFrame source."""
+    cat_capee = {}
+    for col in variables_categorielles:
+        valeurs = df[col].fillna("INCONNU").astype(str)
+        if colonnes_dummies_reference is None:
+            top = valeurs.value_counts().head(CAP_CARDINALITE_CATEGORIELLE).index
+        else:
+            top = None
+        cat_capee[col] = valeurs if top is None else valeurs.where(valeurs.isin(top), "AUTRE")
+    cat_df = pd.concat(
+        [pd.get_dummies(cat_capee[col], prefix=col) for col in variables_categorielles], axis=1
+    )
+    num_df = df[variables_numeriques].reset_index(drop=True).astype("float32")
+    X = pd.concat([num_df, cat_df.reset_index(drop=True)], axis=1)
+    if colonnes_dummies_reference is not None:
+        X = X.reindex(columns=colonnes_dummies_reference, fill_value=0)
+    return X
+
+
+def ajouter_variables_relatives(df, variables_cibles):
+    """Ajoute, pour chaque variable de `variables_cibles`, son RANG (1 =
+    valeur la plus faible du champ) et son Z-SCORE intra-course. Ne calcule
+    rien a partir du resultat de la course : uniquement a partir de valeurs
+    deja point-in-time (memes garanties que niveau_moyen_adversaires /
+    rang_papier_taux_victoire dans variables_historiques.py)."""
+    df = df.copy()
+    g = df.groupby("course_id")
+    for var in variables_cibles:
+        rang_col = f"{var}_rang_course"
+        z_col = f"{var}_z_course"
+        df[rang_col] = g[var].rank(method="min", ascending=True)
+        moyenne = g[var].transform("mean")
+        ecart_type = g[var].transform("std")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            z = (df[var] - moyenne) / ecart_type
+        df[z_col] = z.replace([np.inf, -np.inf], np.nan)
+    return df
+
+
+def colonnes_degenerees(X_train, colonnes_candidates):
+    """Filet de securite generique : une colonne avec < 2 valeurs distinctes
+    non-manquantes (constante, ou entierement NaN) fait planter le binning
+    de HistGradientBoosting (numpy.lib.stride_tricks.sliding_window_view
+    exige au moins 2 valeurs). Controle sur TRAIN uniquement (pas de fuite
+    train/val/test). Retourne la liste des colonnes a exclure."""
+    return [c for c in colonnes_candidates if X_train[c].nunique(dropna=True) < 2]
+
+
+def rang_distribution_gagnant(df_test, rang_col):
+    """Pour chaque course, quel rang le modele a-t-il donne au VRAI
+    gagnant ? Retourne (stats: dict, gagnants: DataFrame une ligne/course)."""
+    gagnants = df_test[df_test["position_arrivee"] == 1].copy()
+    gagnants["rang_du_gagnant"] = gagnants[rang_col]
+    n = len(gagnants)
+    top1 = int((gagnants["rang_du_gagnant"] == 1).sum())
+    top2 = int((gagnants["rang_du_gagnant"] == 2).sum())
+    top3 = int((gagnants["rang_du_gagnant"] == 3).sum())
+    top4_5 = int(gagnants["rang_du_gagnant"].between(4, 5).sum())
+    au_dela = int((gagnants["rang_du_gagnant"] > 5).sum())
+    stats = {
+        "n_courses": n,
+        "top1": top1, "top1_pct": round(100 * top1 / n, 1) if n else float("nan"),
+        "cumul_top2": top1 + top2, "cumul_top2_pct": round(100 * (top1 + top2) / n, 1) if n else float("nan"),
+        "cumul_top3": top1 + top2 + top3, "cumul_top3_pct": round(100 * (top1 + top2 + top3) / n, 1) if n else float("nan"),
+        "cumul_top5": top1 + top2 + top3 + top4_5, "cumul_top5_pct": round(100 * (top1 + top2 + top3 + top4_5) / n, 1) if n else float("nan"),
+        "au_dela_de_5": au_dela, "au_dela_de_5_pct": round(100 * au_dela / n, 1) if n else float("nan"),
+    }
+    return stats, gagnants
+
+
+def ecart_probabilite_gagnant(gagnants, df_test, rang_col, proba_col):
+    """Ecart entre la probabilite du pick choisi par le modele (rang==1) et
+    celle attribuee au vrai gagnant, dans les courses ou le gagnant n'est
+    PAS le pick #1. Retourne (stats: dict, gagnants enrichi)."""
+    picks = df_test[df_test[rang_col] == 1][["course_id", proba_col]].rename(columns={proba_col: "proba_pick"})
+    g = gagnants.merge(picks, on="course_id", how="left")
+    g["ecart_proba"] = g["proba_pick"] - g[proba_col]
+    rates = g[g["rang_du_gagnant"] > 1]
+    n = len(rates)
+    stats = {
+        "n_rates": n,
+        "moyenne": round(float(rates["ecart_proba"].mean()), 4) if n else float("nan"),
+        "mediane": round(float(rates["ecart_proba"].median()), 4) if n else float("nan"),
+        "p90": round(float(rates["ecart_proba"].quantile(0.9)), 4) if n else float("nan"),
+        "quasi_trouve_le_0_02": int((rates["ecart_proba"] <= 0.02).sum()) if n else 0,
+        "quasi_trouve_pct": round(100 * int((rates["ecart_proba"] <= 0.02).sum()) / n, 1) if n else float("nan"),
+    }
+    return stats, g
+
+
+def profils_gagnants(gagnants, variables):
+    """Compare gagnants 'trouves' (rang_du_gagnant==1) vs 'rates' (>1) sur
+    chaque variable. Retourne une liste triee par |d de Cohen| decroissant :
+    [(var, moyenne_trouve, moyenne_rate, d_cohen), ...]."""
+    trouve = gagnants[gagnants["rang_du_gagnant"] == 1]
+    rate = gagnants[gagnants["rang_du_gagnant"] > 1]
+    resultats = []
+    for var in variables:
+        if var not in gagnants.columns:
+            continue
+        m_t, m_r = trouve[var].mean(), rate[var].mean()
+        s_t, s_r = trouve[var].std(), rate[var].std()
+        n_t, n_r = int(trouve[var].notna().sum()), int(rate[var].notna().sum())
+        if n_t > 1 and n_r > 1:
+            pooled = np.sqrt(((n_t - 1) * s_t ** 2 + (n_r - 1) * s_r ** 2) / max(n_t + n_r - 2, 1))
+            d = (m_t - m_r) / pooled if pooled and pooled > 0 else np.nan
+        else:
+            d = np.nan
+        resultats.append((var, m_t, m_r, d))
+    resultats.sort(key=lambda x: abs(x[3]) if pd.notna(x[3]) else -1, reverse=True)
+    return resultats
+
+
+def performance_segments_gagnant(df_test, rang_col):
+    """Taux de reussite top-1 gagnant (methodologie B) par segment : nombre
+    de partants, handicap ou non, distance, terrain. Retourne un dict de
+    listes [(segment, n_courses, n_reussis, pct), ...]."""
+    d = df_test.copy()
+    d["groupe_partants"] = d["nb_partants_reel"].apply(bucket_partants)
+    d["est_handicap"] = d["categorie_particularite"].fillna("").str.contains("HANDICAP")
+    resultats = {"partants": [], "handicap": [], "distance": [], "terrain": []}
+    for groupe, sous_df in d.groupby("groupe_partants"):
+        n_c, n_r, pct = taux_reussite_top1(sous_df, rang_col, "est_gagnant")
+        resultats["partants"].append((groupe, n_c, n_r, pct))
+    for est_h, sous_df in d.groupby("est_handicap"):
+        n_c, n_r, pct = taux_reussite_top1(sous_df, rang_col, "est_gagnant")
+        resultats["handicap"].append(("HANDICAP" if est_h else "NON HANDICAP", n_c, n_r, pct))
+    for dist_b, sous_df in d.groupby(d["distance_bucket"].fillna("INCONNU")):
+        if sous_df["course_id"].nunique() < 100:
+            continue
+        n_c, n_r, pct = taux_reussite_top1(sous_df, rang_col, "est_gagnant")
+        resultats["distance"].append((dist_b, n_c, n_r, pct))
+    for terr_b, sous_df in d.groupby(d["terrain_bucket"].fillna("INCONNU")):
+        if sous_df["course_id"].nunique() < 100:
+            continue
+        n_c, n_r, pct = taux_reussite_top1(sous_df, rang_col, "est_gagnant")
+        resultats["terrain"].append((terr_b, n_c, n_r, pct))
+    return resultats
+
+
+def log_analyse_erreurs(df_test, rang_col, proba_col, label):
+    """Enchaine et journalise l'analyse d'erreurs complete pour un modele
+    donne (identifie par `label`). Retourne les objets de stats bruts, au
+    cas ou il faille les reutiliser."""
+    stats_rang, gagnants = rang_distribution_gagnant(df_test, rang_col)
+    log(f"\n-- Rang donne par le modele au gagnant reel, sur {stats_rang['n_courses']} courses ({label}) --")
+    log(f"  Gagnant = pick #1 (trouve) : {stats_rang['top1']}/{stats_rang['n_courses']} = {stats_rang['top1_pct']}%")
+    log(f"  Gagnant dans le top 2 : {stats_rang['cumul_top2']}/{stats_rang['n_courses']} = {stats_rang['cumul_top2_pct']}%")
+    log(f"  Gagnant dans le top 3 : {stats_rang['cumul_top3']}/{stats_rang['n_courses']} = {stats_rang['cumul_top3_pct']}%")
+    log(f"  Gagnant dans le top 5 : {stats_rang['cumul_top5']}/{stats_rang['n_courses']} = {stats_rang['cumul_top5_pct']}%")
+    log(f"  Gagnant au-dela du top 5 : {stats_rang['au_dela_de_5']}/{stats_rang['n_courses']} = {stats_rang['au_dela_de_5_pct']}%")
+
+    stats_ecart, gagnants = ecart_probabilite_gagnant(gagnants, df_test, rang_col, proba_col)
+    log(f"\n  Ecart de probabilite (pick choisi moins gagnant reel), courses ou le gagnant n'est PAS le pick #1 (n={stats_ecart['n_rates']}) :")
+    log(f"    Moyenne={stats_ecart['moyenne']}  Mediane={stats_ecart['mediane']}  P90={stats_ecart['p90']}")
+    log(f"    Cas 'quasi-trouve' (ecart <= 0.02) : {stats_ecart['quasi_trouve_le_0_02']}/{stats_ecart['n_rates']} = "
+        f"{stats_ecart['quasi_trouve_pct']}% â le modele hesitait entre 2 chevaux tres proches.")
+
+    profils = profils_gagnants(gagnants, VARIABLES_PROFIL_GAGNANTS)
+    log(f"\n  Profils compares : gagnants trouves vs gagnants rates ({label}) â tries par ecart standardise (d de Cohen) :")
+    for var, m_t, m_r, d in profils:
+        marqueur = "  <-- ecart notable" if pd.notna(d) and abs(d) >= 0.2 else ""
+        if pd.notna(d):
+            log(f"    {var:45s} trouve={m_t:.3f} rate={m_r:.3f} d={d:+.3f}{marqueur}")
+        else:
+            log(f"    {var:45s} trouve={m_t} rate={m_r} d=NA")
+
+    segs = performance_segments_gagnant(df_test, rang_col)
+    log(f"\n  Performance top-1 gagnant par segment ({label}) :")
+    log("    -- Par nombre de partants --")
+    for seg, n_c, n_r, pct in segs["partants"]:
+        log(f"      {seg:15s} {n_r}/{n_c} = {pct}%")
+    log("    -- Handicap vs non-handicap --")
+    for seg, n_c, n_r, pct in segs["handicap"]:
+        log(f"      {seg:15s} {n_r}/{n_c} = {pct}%")
+    log("    -- Par distance --")
+    for seg, n_c, n_r, pct in segs["distance"]:
+        log(f"      {str(seg):15s} {n_r}/{n_c} = {pct}%")
+    log("    -- Par terrain --")
+    for seg, n_c, n_r, pct in segs["terrain"]:
+        log(f"      {str(seg):15s} {n_r}/{n_c} = {pct}%")
+
+    return stats_rang, stats_ecart, profils, segs
+
+
+def entrainer_gbm_avec_grille(X_train, y_train, X_val, y_val, grille, label):
+    """Recherche d'hyperparametres sur VALIDATION (identique au protocole
+    v2). Retourne (meilleurs_params, meilleure_auc_val)."""
+    meilleurs_params, meilleure_auc_val = None, -1
+    for params in grille:
+        m = HistGradientBoostingClassifier(random_state=RANDOM_SEED, **params)
+        m.fit(X_train, y_train)
+        try:
+            auc_val = roc_auc_score(y_val, m.predict_proba(X_val)[:, 1])
+        except ValueError:
+            auc_val = -1
+        log(f"  [{label}] {params} -> AUC validation = {round(auc_val, 4)}")
+        if auc_val > meilleure_auc_val:
+            meilleure_auc_val, meilleurs_params = auc_val, params
+        del m
+    return meilleurs_params, meilleure_auc_val
