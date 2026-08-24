@@ -1,0 +1,31 @@
+name: Test pipeline v3 resumable (echantillon synthetique, sans Supabase)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances
+        run: pip install pandas numpy scikit-learn
+      - name: Lancer le test smoke (donnees synthetiques, pas de secret DB)
+        run: set -o pipefail; python test_pipeline_v3_resumable.py | tee rapport_test_resumable.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport - test pipeline v3 resumable (synthetique)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_test_resumable.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-test-resumable
+          path: rapport_test_resumable.txt
