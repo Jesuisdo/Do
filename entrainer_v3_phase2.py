@@ -32,9 +32,9 @@ CHECKPOINT_PATH = "checkpoint_v3_phase1.pkl"
 
 
 def main():
-    if not lib.DEPENDANCES_LOURDES_DISPONIBLES:
+    if not lib.SKLEARN_DISPONIBLE:
         raise RuntimeError(
-            "psycopg2 et/ou scikit-learn ne sont pas installes. Ce script doit tourner dans "
+            "scikit-learn n'est pas installe. Ce script doit tourner dans "
             "l'environnement GitHub Actions du workflow dedie, pas en local."
         )
     lib.log("=" * 100)
