@@ -1,0 +1,46 @@
+name: Etape preparatoire piste 3 - extraction metadata TRAIN VALIDATION
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extraction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances
+        run: pip install psycopg2-binary pandas numpy scikit-learn
+      - name: Telecharger le checkpoint existant du run production (id 32871825116)
+        uses: actions/download-artifact@v4
+        with:
+          name: checkpoint-v3
+          run-id: 32871825116
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reconstruire le pipeline, verifier l'egalite, extraire la metadata manquante
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+        run: set -o pipefail; python extraire_metadata_train_val.py | tee rapport_extraction_metadata.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport - extraction metadata TRAIN VALIDATION" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_extraction_metadata.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-extraction-metadata
+          path: rapport_extraction_metadata.txt
+      - name: Uploader la metadata (pour la piste 3)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-train-val-v3
+          path: metadata_train_val_v3.pkl
+          retention-days: 5
