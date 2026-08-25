@@ -147,6 +147,16 @@ def main():
     # les colonnes relatives degenerees ne doivent plus etre proposees a la
     # phase 2 (permutation importance, etc.)
     colonnes_relatives = [c for c in colonnes_relatives if c not in degenerees]
+    # bug identifie le 25/08/2026 (run production #6) : colonnes_v2_ctrl a
+    # ete calcule AVANT le filet de securite, a partir de colonnes_v3 non
+    # filtre. Si une colonne "de base" (hors variables relatives v3, ex.
+    # entraine_a_letranger, degeneree sur les donnees reelles) est exclue
+    # ci-dessus, X_train_v3 ne la contient plus -> KeyError au fit du modele
+    # v2. On applique le meme filtrage, pour rester coherent avec
+    # colonnes_v3_filtrees (aucun changement de variable ni de methodologie :
+    # c'est le meme filet de securite deja valide, applique de facon
+    # uniforme).
+    colonnes_v2_ctrl = [c for c in colonnes_v2_ctrl if c not in degenerees]
 
     # =========================================================================
     # [6/6] MODELE v2 (reproduit a l'identique) â pour disposer des
