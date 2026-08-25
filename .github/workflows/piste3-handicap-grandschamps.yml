@@ -1,0 +1,43 @@
+name: Piste 3 - modele conditionnel handicaps et grands champs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  piste3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances (pas de psycopg2, aucune connexion Supabase)
+        run: pip install pandas numpy scikit-learn
+      - name: Telecharger le checkpoint-v3 du run production (id 32871825116)
+        uses: actions/download-artifact@v4
+        with:
+          name: checkpoint-v3
+          run-id: 32871825116
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Telecharger la metadata TRAIN VALIDATION (etape preparatoire deja verifiee)
+        uses: actions/download-artifact@v4
+        with:
+          name: metadata-train-val-v3
+          run-id: 32890757834
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Piste 3 - modele conditionnel handicaps et grands champs
+        run: set -o pipefail; python piste3_handicap_grandschamps.py | tee rapport_piste3.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport - piste 3 (handicaps et grands champs)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_piste3.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-piste3
+          path: rapport_piste3.txt
