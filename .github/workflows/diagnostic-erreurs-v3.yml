@@ -1,0 +1,44 @@
+name: Analyse d'erreurs approfondie v3 (diagnostic, lecture seule)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances (pas de psycopg2 : aucune connexion Supabase)
+        run: pip install pandas numpy scikit-learn
+      - name: Telecharger le checkpoint-v3 du run production (id 32871825116)
+        uses: actions/download-artifact@v4
+        with:
+          name: checkpoint-v3
+          run-id: 32871825116
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Analyse d'erreurs approfondie (reproduction deterministe des predictions v3 + diagnostic complet)
+        run: set -o pipefail; python analyse_erreurs_v3_diagnostic.py | tee rapport_diagnostic_v3.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport - analyse d'erreurs approfondie v3 (diagnostic)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_diagnostic_v3.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-diagnostic-v3
+          path: rapport_diagnostic_v3.txt
+      - name: Uploader le df_test enrichi (proba/rang v2+v3, flags diagnostic) pour reutilisation eventuelle
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: df-test-diagnostic-v3
+          path: df_test_diagnostic_v3.pkl
+          retention-days: 5
