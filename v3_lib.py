@@ -413,3 +413,199 @@ def entrainer_gbm_avec_grille(X_train, y_train, X_val, y_val, grille, label):
             meilleure_auc_val, meilleurs_params = auc_val, params
         del m
     return meilleurs_params, meilleure_auc_val
+
+
+# =============================================================================
+# ANALYSE D'ERREURS APPROFONDIE (demandee par Dorian le 25/08/2026, APRES le
+# run production v3 qui a montre AUC en hausse mais top-1 gagnant stagnant a
+# ~24,4%). But : comprendre POURQUOI le modele se trompe, PAS l'ameliorer.
+# Aucune de ces fonctions ne selectionne de variable ni ne modifie un modele
+# â lecture seule sur des predictions et des variables deja point-in-time.
+# =============================================================================
+
+# Variables demandees explicitement par Dorian pour le profil des erreurs :
+# musique/forme, repos, corde, age, poids, niveau des adversaires, plus des
+# proxys "information disponible avant la course" (carriere/historique
+# interne) pour trancher entre probleme de modele et probleme de donnees.
+VARIABLES_DIAGNOSTIC_ERREURS = [
+    "musique_dernier", "musique_moy3", "musique_tendance",
+    "jours_repos", "place_corde",
+    "age", "handicap_poids", "poids_condition_monte", "poids_delta_vs_carriere",
+    "niveau_moyen_adversaires", "ecart_vs_niveau_moyen_champ", "rang_papier_taux_victoire",
+    "carriere_nb_courses", "carriere_taux_victoire", "carriere_taux_place", "gains_carriere",
+    "forme_nb_courses_disponibles", "forme_moy_position_5", "forme_moy_position_10",
+    "forme_ecart_type_position_5", "forme_tendance_5_vs_10",
+    "distance_m", "terrain_valeur_penetrometre",
+    "allocation_delta_vs_carriere",
+]
+
+
+def bucket_rang_3(rang):
+    """Regroupement en 3 buckets utilise pour toute l'analyse d'erreurs :
+    top1 (trouve), top2_a_5 (presque trouve), hors_top5 (rate largement)."""
+    if pd.isna(rang):
+        return "inconnu"
+    if rang == 1:
+        return "top1"
+    if 2 <= rang <= 5:
+        return "top2_a_5"
+    return "hors_top5"
+
+
+def ajouter_flags_diagnostic(df_test):
+    """Ajoute au DataFrame les colonnes derivees necessaires a l'analyse
+    d'erreurs (aucune n'utilise le resultat de la course) :
+      - bucket_partants : petit/moyen/grand champ
+      - est_handicap : booleen
+      - est_debutant : peu/pas de courses en carriere officielle OU aucun
+        historique interne exploitable (proxy "information manquante avant
+        la course")
+      - identite_possible_fragmentee : carriere officielle connue (>3
+        courses) MAIS historique interne vide -> le lien horse_uid n'a
+        probablement pas retrouve les courses precedentes de ce cheval
+        (proxy "probleme d'identification", cf. identite_chevaux.py que ne
+        renvoie qu'un rapport agrege, pas de flag par ligne)."""
+    d = df_test.copy()
+    d["bucket_partants"] = d["nb_partants_reel"].apply(bucket_partants)
+    d["est_handicap"] = d["categorie_particularite"].fillna("").str.contains("HANDICAP")
+    carriere = d["carriere_nb_courses"].fillna(0) if "carriere_nb_courses" in d.columns else pd.Series(0, index=d.index)
+    forme_dispo = d["forme_nb_courses_disponibles"].fillna(0) if "forme_nb_courses_disponibles" in d.columns else pd.Series(0, index=d.index)
+    d["est_debutant"] = (carriere <= 2) | (forme_dispo == 0)
+    d["identite_possible_fragmentee"] = (carriere > 3) & (forme_dispo == 0)
+    return d
+
+
+def profils_par_bucket_rang(gagnants, variables):
+    """Version a 3 groupes de profils_gagnants : compare top1 / top2_a_5 /
+    hors_top5 (au lieu du seul trouve/rate binaire), avec un d de Cohen de
+    chaque groupe vs top1 (le groupe de reference "ce qui caracterise un
+    gagnant que le modele repere bien"). gagnants doit deja avoir
+    'rang_du_gagnant' (voir rang_distribution_gagnant)."""
+    g = gagnants.copy()
+    g["bucket_rang"] = g["rang_du_gagnant"].apply(bucket_rang_3)
+    resultats = []
+    for var in variables:
+        if var not in g.columns:
+            continue
+        stats_par_bucket = {}
+        for b in ["top1", "top2_a_5", "hors_top5"]:
+            sous = g.loc[g["bucket_rang"] == b, var]
+            stats_par_bucket[b] = (sous.mean(), sous.std(), int(sous.notna().sum()))
+        row = {"variable": var}
+        for b in ["top1", "top2_a_5", "hors_top5"]:
+            m, _, n = stats_par_bucket[b]
+            row[f"{b}_moyenne"] = round(float(m), 3) if pd.notna(m) else None
+            row[f"{b}_n"] = n
+        m1, s1, n1 = stats_par_bucket["top1"]
+        for b in ["top2_a_5", "hors_top5"]:
+            mb, sb, nb = stats_par_bucket[b]
+            if n1 > 1 and nb > 1 and pd.notna(m1) and pd.notna(mb) and pd.notna(s1) and pd.notna(sb):
+                pooled = np.sqrt(((n1 - 1) * s1 ** 2 + (nb - 1) * sb ** 2) / max(n1 + nb - 2, 1))
+                d = (m1 - mb) / pooled if pooled and pooled > 0 else np.nan
+            else:
+                d = np.nan
+            row[f"d_top1_vs_{b}"] = round(float(d), 3) if pd.notna(d) else None
+        resultats.append(row)
+    out = pd.DataFrame(resultats)
+    if not out.empty:
+        out["abs_d_max"] = out[["d_top1_vs_top2_a_5", "d_top1_vs_hors_top5"]].abs().max(axis=1)
+        out = out.sort_values("abs_d_max", ascending=False).drop(columns=["abs_d_max"])
+    return out
+
+
+def comparer_gagnant_vs_pick_modele(df_test, rang_col, proba_col, variables):
+    """Pour les courses ou le pick #1 du modele n'est PAS le vrai gagnant,
+    met en regard les valeurs de `variables` pour le gagnant reel et pour
+    le cheval que le modele a prefere a tort. Repond directement a : 'quand
+    le gagnant n'est pas trouve, qu'est-ce qui a fait pencher le modele
+    vers un autre cheval ?'. Retourne (DataFrame comparatif, n_courses_ratees)."""
+    colonnes = ["course_id"] + [v for v in variables if v in df_test.columns] + [proba_col]
+    gagnants = df_test.loc[df_test["position_arrivee"] == 1, colonnes].copy()
+    picks = df_test.loc[df_test[rang_col] == 1, colonnes].copy()
+    fusion = gagnants.merge(picks, on="course_id", how="inner", suffixes=("_gagnant", "_pick_modele"))
+    meme_cheval = fusion[f"{proba_col}_gagnant"] == fusion[f"{proba_col}_pick_modele"]
+    rates = fusion[~meme_cheval]
+    n = len(rates)
+    resultats = []
+    for var in variables:
+        col_g, col_p = f"{var}_gagnant", f"{var}_pick_modele"
+        if col_g not in rates.columns or col_p not in rates.columns:
+            continue
+        m_g, m_p = rates[col_g].mean(), rates[col_p].mean()
+        resultats.append({
+            "variable": var,
+            "moyenne_vrai_gagnant": round(float(m_g), 3) if pd.notna(m_g) else None,
+            "moyenne_pick_modele_a_tort": round(float(m_p), 3) if pd.notna(m_p) else None,
+            "ecart": round(float(m_p - m_g), 3) if pd.notna(m_g) and pd.notna(m_p) else None,
+        })
+    out = pd.DataFrame(resultats)
+    if not out.empty:
+        out = out.reindex(out["ecart"].abs().sort_values(ascending=False, na_position="last").index)
+    return out, n
+
+
+def distribution_ecart_probabilite_buckets(gagnants_avec_ecart):
+    """Repartit les courses ratees (gagnant pas pick #1) en tranches
+    d'ecart de probabilite (pick_modele - gagnant), globalement, avec pour
+    chaque tranche la probabilite moyenne attribuee au pick #1 fautif (une
+    proba de pick eleve = modele confiant a tort = plutot un probleme de
+    modele ; une proba de pick faible et diffuse = plusieurs chevaux
+    proches = plutot une limite d'information)."""
+    rates = gagnants_avec_ecart[gagnants_avec_ecart["rang_du_gagnant"] > 1].copy()
+    n = len(rates)
+    if n == 0:
+        return []
+    bornes = [0, 0.01, 0.05, 0.10, 0.20, 0.40, 1.01]
+    labels = ["<=0.01", "0.01-0.05", "0.05-0.10", "0.10-0.20", "0.20-0.40", ">0.40"]
+    rates["tranche"] = pd.cut(rates["ecart_proba"], bins=bornes, labels=labels, include_lowest=True)
+    resultats = []
+    for tranche in labels:
+        sous = rates[rates["tranche"] == tranche]
+        if len(sous) == 0:
+            continue
+        resultats.append({
+            "tranche_ecart": tranche,
+            "n_courses": len(sous),
+            "pct_des_courses_ratees": round(100 * len(sous) / n, 1),
+            "proba_moyenne_du_pick_fautif": round(float(sous["proba_pick"].mean()), 3),
+        })
+    return resultats
+
+
+def taux_gagnant_par_segments(df_test, rang_col, segment_cols, n_min=100):
+    """Generalisation de performance_segments_gagnant a une ou plusieurs
+    colonnes de segmentation deja presentes dans df_test (categorielles ou
+    discretisees au prealable, ex. bucket_partants). Retourne un DataFrame
+    trie par taux top-1 gagnant CROISSANT (les segments les plus difficiles
+    en premier), limite aux segments avec au moins n_min courses pour
+    eviter le bruit d'echantillon."""
+    d = df_test.copy()
+    resultats = []
+    for cles, sous_df in d.groupby(segment_cols, observed=True):
+        n_courses, n_reussis, pct = taux_reussite_top1(sous_df, rang_col, "est_gagnant")
+        if n_courses < n_min:
+            continue
+        cles_tuple = cles if isinstance(cles, tuple) else (cles,)
+        cols = segment_cols if isinstance(segment_cols, list) else [segment_cols]
+        ligne = {col: val for col, val in zip(cols, cles_tuple)}
+        ligne.update({"n_courses": n_courses, "n_reussis": n_reussis, "pct_top1_gagnant": pct})
+        resultats.append(ligne)
+    out = pd.DataFrame(resultats)
+    if not out.empty:
+        out = out.sort_values("pct_top1_gagnant")
+    return out
+
+
+def taux_top1_par_groupe_binaire(gagnants, colonne_bool):
+    """Taux top-1 gagnant (parmi les VRAIS gagnants) selon une colonne
+    booleenne (ex. est_debutant, identite_possible_fragmentee). Sert a
+    isoler l'effet d'un sous-groupe precis sur la performance globale."""
+    resultats = []
+    for val, sous in gagnants.groupby(colonne_bool):
+        n = len(sous)
+        top1 = int((sous["rang_du_gagnant"] == 1).sum())
+        resultats.append({
+            colonne_bool: bool(val), "n_gagnants": n, "n_top1": top1,
+            "pct_top1": round(100 * top1 / n, 1) if n else None,
+        })
+    return resultats
