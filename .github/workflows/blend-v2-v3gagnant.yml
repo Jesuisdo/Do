@@ -1,0 +1,37 @@
+name: Etape 1 - blend v2 + v3-gagnant (poids choisi sur validation)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  blend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances (pas de psycopg2, aucune connexion Supabase)
+        run: pip install pandas numpy scikit-learn
+      - name: Telecharger le checkpoint-v3 du run production (id 32871825116)
+        uses: actions/download-artifact@v4
+        with:
+          name: checkpoint-v3
+          run-id: 32871825116
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tester le blend v2 plus v3-gagnant (poids choisi sur validation, confirmation sur TEST scinde en 2)
+        run: set -o pipefail; python blend_v2_v3gagnant.py | tee rapport_blend_v2_v3gagnant.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport - blend v2 plus v3-gagnant" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_blend_v2_v3gagnant.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-blend-v2-v3gagnant
+          path: rapport_blend_v2_v3gagnant.txt
