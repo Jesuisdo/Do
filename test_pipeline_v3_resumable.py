@@ -72,9 +72,14 @@ def _df_synthetique(n_courses=40, seed=0, avec_variable_globalement_constante=Tr
     df["cible_place"] = (df["position_arrivee"] <= df["seuil"]).astype(int)
     df["est_gagnant"] = (df["position_arrivee"] == 1).astype(int)
     if avec_variable_globalement_constante:
-        # Simule le bug reel (montant_allocation) : une variable dont la
-        # valeur est identique pour TOUTES les lignes -> degeneree.
-        df["variable_test_degeneree"] = 42.0
+        # Simule fidelement le bug reel (montant_allocation_z_course) : ce
+        # n'est pas une simple constante non-nulle (qui n'a PAS fait planter
+        # HistGradientBoosting lors du premier essai de ce test, le 24/08/2026
+        # -> negatif rate) mais une colonne ENTIEREMENT NaN (le cas reel :
+        # ecart-type intra-course nul -> division 0/0 -> NaN partout).
+        # C'est ce cas precis (0 valeur non-manquante) qui fait planter le
+        # binning (sliding_window_view exige >=2 elements).
+        df["variable_test_degeneree"] = np.nan
     df = lib.ajouter_variables_relatives(df, lib.VARIABLES_RELATIVES_CIBLES)
     return df
 
