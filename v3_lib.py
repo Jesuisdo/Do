@@ -25,16 +25,33 @@ import pandas as pd
 try:
     import psycopg2
     import psycopg2.extras
+    PSYCOPG2_DISPONIBLE = True
+except ImportError:
+    # psycopg2 n'est necessaire qu'a la phase 1 (chargement Supabase). La
+    # phase 2 et le test smoke n'en ont pas besoin et ne l'installent pas
+    # (bug identifie le 24/08/2026 : un seul try/except combine psycopg2 ET
+    # scikit-learn faisait que l'absence de psycopg2 seul empechait aussi le
+    # binding de HistGradientBoostingClassifier dans ce module -> NameError
+    # dans entrainer_gbm_avec_grille en phase 2, meme quand scikit-learn
+    # etait bien installe. Les deux dependances sont maintenant isolees.)
+    PSYCOPG2_DISPONIBLE = False
+
+try:
     from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.metrics import roc_auc_score, log_loss
     from sklearn.inspection import permutation_importance
-    DEPENDANCES_LOURDES_DISPONIBLES = True
+    SKLEARN_DISPONIBLE = True
 except ImportError:
-    # psycopg2/scikit-learn ne sont pas installables dans l'environnement de
+    # scikit-learn n'est pas installable dans l'environnement de
     # developpement local de ce projet (proxy sortant restreint) â ce module
     # est concu pour tourner via GitHub Actions. En local, seule la logique
-    # pandas pure est testable â voir test_entrainer_et_evaluer_v3.py.
-    DEPENDANCES_LOURDES_DISPONIBLES = False
+    # pandas pure est testable â voir test_v3_lib.py.
+    SKLEARN_DISPONIBLE = False
+
+# Conserve pour compatibilite : la phase 1 a besoin des DEUX dependances
+# (chargement Supabase + reproduction du modele v2). La phase 2 et le test
+# smoke ne dependent, eux, que de SKLEARN_DISPONIBLE (voir plus haut).
+DEPENDANCES_LOURDES_DISPONIBLES = PSYCOPG2_DISPONIBLE and SKLEARN_DISPONIBLE
 
 from datetime import datetime
 
