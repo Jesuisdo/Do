@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v3_lib.py â Module partage entre entrainer_v3_phase1.py (etapes 1-6 :
+v3_lib.py — Module partage entre entrainer_v3_phase1.py (etapes 1-6 :
 chargement, construction des variables, split, reproduction du modele v2)
 et entrainer_v3_phase2.py (etapes 7-9 : entrainement des modeles v3,
 comparaison finale). Contient TOUTE la logique commune (constantes,
@@ -43,9 +43,9 @@ try:
     SKLEARN_DISPONIBLE = True
 except ImportError:
     # scikit-learn n'est pas installable dans l'environnement de
-    # developpement local de ce projet (proxy sortant restreint) â ce module
+    # developpement local de ce projet (proxy sortant restreint) â ce module
     # est concu pour tourner via GitHub Actions. En local, seule la logique
-    # pandas pure est testable â voir test_v3_lib.py.
+    # pandas pure est testable â voir test_v3_lib.py.
     SKLEARN_DISPONIBLE = False
 
 # Conserve pour compatibilite : la phase 1 a besoin des DEUX dependances
@@ -84,10 +84,10 @@ GRILLE_GBM = [
 # Choisies a partir de deux sources convergentes : (a) le top de
 # l'importance par permutation du rapport v2 et (b) les categories
 # explicitement demandees par Dorian (ecart d'allocation vs carriere,
-# musique, repos, corde, interactions jockey/entraineur â completees ici
+# musique, repos, corde, interactions jockey/entraineur â completees ici
 # par jockey/cheval et entraineur/cheval). Pour chacune, on ajoute son RANG
 # et son Z-SCORE intra-course (calcules uniquement a partir de valeurs deja
-# connues avant la course â aucune fuite).
+# connues avant la course â aucune fuite).
 VARIABLES_RELATIVES_CIBLES = [
     "allocation_delta_vs_carriere",
     # "montant_allocation" retire (bug identifie le 24/08/2026) : c'est le
@@ -368,10 +368,10 @@ def log_analyse_erreurs(df_test, rang_col, proba_col, label):
     log(f"\n  Ecart de probabilite (pick choisi moins gagnant reel), courses ou le gagnant n'est PAS le pick #1 (n={stats_ecart['n_rates']}) :")
     log(f"    Moyenne={stats_ecart['moyenne']}  Mediane={stats_ecart['mediane']}  P90={stats_ecart['p90']}")
     log(f"    Cas 'quasi-trouve' (ecart <= 0.02) : {stats_ecart['quasi_trouve_le_0_02']}/{stats_ecart['n_rates']} = "
-        f"{stats_ecart['quasi_trouve_pct']}% â le modele hesitait entre 2 chevaux tres proches.")
+        f"{stats_ecart['quasi_trouve_pct']}% â le modele hesitait entre 2 chevaux tres proches.")
 
     profils = profils_gagnants(gagnants, VARIABLES_PROFIL_GAGNANTS)
-    log(f"\n  Profils compares : gagnants trouves vs gagnants rates ({label}) â tries par ecart standardise (d de Cohen) :")
+    log(f"\n  Profils compares : gagnants trouves vs gagnants rates ({label}) â tries par ecart standardise (d de Cohen) :")
     for var, m_t, m_r, d in profils:
         marqueur = "  <-- ecart notable" if pd.notna(d) and abs(d) >= 0.2 else ""
         if pd.notna(d):
@@ -420,7 +420,7 @@ def entrainer_gbm_avec_grille(X_train, y_train, X_val, y_val, grille, label):
 # run production v3 qui a montre AUC en hausse mais top-1 gagnant stagnant a
 # ~24,4%). But : comprendre POURQUOI le modele se trompe, PAS l'ameliorer.
 # Aucune de ces fonctions ne selectionne de variable ni ne modifie un modele
-# â lecture seule sur des predictions et des variables deja point-in-time.
+# â lecture seule sur des predictions et des variables deja point-in-time.
 # =============================================================================
 
 # Variables demandees explicitement par Dorian pour le profil des erreurs :
@@ -609,3 +609,129 @@ def taux_top1_par_groupe_binaire(gagnants, colonne_bool):
             "pct_top1": round(100 * top1 / n, 1) if n else None,
         })
     return resultats
+
+
+# =============================================================================
+# PROTOCOLE D'EVALUATION PERMANENT -- benchmark reel vs benchmark donnees
+# propres (demande par Dorian le 26/08/2026, apres le rejet du blend (piste
+# 1) et de la calibration handicaps/grands champs (piste 3), pour s'assurer
+# que toute future experimentation soit jugee sur des donnees fiables et
+# non sur des anomalies de collecte/scraping deguisees en erreurs modele).
+#
+# Deux benchmarks, a afficher COTE A COTE dans chaque futur rapport :
+#
+#   - BENCHMARK REEL (reference principale) : toutes les courses avec un
+#     resultat exploitable, y COMPRIS les courses avec NON_PARTANT, ARRETE,
+#     TOMBE, DISTANCE, RESTE_AU_POTEAU, DEROBE ou DISQUALIFIE -- ce sont des
+#     evenements hippiques officiels normaux, pas des anomalies. Seules les
+#     courses SANS AUCUNE position d'arrivee (aucune verite terrain
+#     exploitable, quelle que soit la raison) en sont necessairement
+#     absentes -- impossible de juger une prediction sans resultat.
+#
+#   - BENCHMARK DONNEES PROPRES : la MEME population que le benchmark reel,
+#     moins 3 motifs d'exclusion strictement objectifs et factuels, valides
+#     explicitement par Dorian le 26/08/2026 :
+#       1. sans_resultat      : course sans aucune position d'arrivee pour
+#          aucun partant (40 courses sur l'historique complet au
+#          26/08/2026). Exclue des DEUX benchmarks (aucune verite terrain).
+#       2. triple_ex_aequo    : au moins 3 partants partagent exactement la
+#          meme position d'arrivee au sein d'une course -- mathematiquement
+#          quasi impossible comme vrai resultat, quasi certainement une
+#          erreur de saisie/scraping (15 courses).
+#       3. statut_inconnu     : la course a par ailleurs un resultat, mais
+#          au moins un partant n'a NI position d'arrivee NI incident
+#          officiel enregistre (NON_PARTANT/ARRETE/TOMBE/DISTANCE/
+#          RESTE_AU_POTEAU/DEROBE/DISQUALIFIE) -- statut reellement
+#          indetermine, donnee manquante plutot qu'evenement hippique
+#          explicable (4658 courses).
+#
+#   IMPORTANT (decision explicite de Dorian, 26/08/2026) : les courses avec
+#   EXACTEMENT 2 partants a egalite sur une meme position (2278 courses)
+#   restent dans les DEUX benchmarks -- pas de preuve qu'il s'agisse d'une
+#   anomalie plutot que d'un vrai dead-heat ou d'une convention de
+#   classement des chevaux distances.
+#
+#   Regle absolue : aucune course n'est jamais retiree parce que son
+#   resultat est surprenant, imprevisible ou defavorable au modele. Seules
+#   des anomalies factuelles et objectives (definies ci-dessus) sont
+#   retirees, et uniquement du benchmark propre (sauf sans_resultat, retire
+#   des deux faute de verite terrain a comparer).
+#
+# La classification (course_id -> motif_exclusion) a ete calculee UNE FOIS
+# par requete SQL directe sur Supabase (table resultats_partants, colonnes
+# position_arrivee + incident) le 26/08/2026, verifiee (totaux et
+# repartition par motif confirmes independamment), puis exportee dans
+# exclusions_benchmark_propre.csv (4713 lignes : course_id, motif_exclusion
+# -- seules les courses EXCLUES y figurent ; l'absence d'une course dans ce
+# fichier signifie qu'elle est incluse dans les deux benchmarks). Ce
+# fichier est charge en lecture seule par les scripts d'evaluation, SANS
+# jamais se reconnecter a Supabase -- exactement comme le checkpoint-v3.
+#
+# A REGENERER PERIODIQUEMENT (nouvelle requete SQL + nouvel export) au fur
+# et a mesure que de nouvelles courses sont collectees, pour que les
+# benchmarks restent a jour. Ce n'est PAS automatique.
+# =============================================================================
+
+EXCLUSIONS_BENCHMARK_PATH = "exclusions_benchmark_propre.csv"
+
+NOMS_MOTIFS_EXCLUSION_BENCHMARK = {
+    "sans_resultat": "Course sans aucun resultat (exclue des DEUX benchmarks -- aucune verite terrain)",
+    "triple_ex_aequo": "3+ partants a la meme position d'arrivee (exclue du benchmark propre)",
+    "statut_inconnu": "Partant sans position ET sans incident officiel connu (exclue du benchmark propre)",
+}
+
+
+def charger_exclusions_benchmark(chemin=EXCLUSIONS_BENCHMARK_PATH):
+    """Charge la table d'exclusions (course_id -> motif_exclusion), deja
+    calculee et verifiee (voir docstring de section ci-dessus). Lecture
+    seule d'un fichier CSV statique versionne -- ne se connecte JAMAIS a
+    Supabase depuis un script d'evaluation."""
+    return pd.read_csv(chemin, dtype={"course_id": str, "motif_exclusion": str})
+
+
+def appliquer_benchmarks(df, exclusions):
+    """Ajoute a `df` (doit contenir une colonne course_id) les colonnes :
+      - motif_exclusion_benchmark : motif si la course est exclue de l'un
+        des deux benchmarks, sinon NaN.
+      - est_benchmark_reel : True sauf si motif == 'sans_resultat'.
+      - est_benchmark_propre : True seulement si aucun motif d'exclusion.
+    Ne retire AUCUNE ligne -- c'est a l'appelant de filtrer selon le
+    benchmark voulu (ex. df[df['est_benchmark_propre']])."""
+    motifs = exclusions.set_index("course_id")["motif_exclusion"]
+    motif_course = df["course_id"].map(motifs)
+    d = df.copy()
+    d["motif_exclusion_benchmark"] = motif_course
+    d["est_benchmark_reel"] = motif_course != "sans_resultat"
+    d["est_benchmark_propre"] = motif_course.isna()
+    return d
+
+
+def rapport_double_benchmark(df_avec_benchmarks, label=""):
+    """Journalise, pour un DataFrame deja enrichi par appliquer_benchmarks(),
+    le nombre exact de courses dans le benchmark reel et dans le benchmark
+    donnees propres, cote a cote, avec le detail des motifs d'exclusion --
+    A APPELER SYSTEMATIQUEMENT dans chaque futur rapport (demande de
+    Dorian, 26/08/2026). Retourne un dict {n_total, n_benchmark_reel,
+    n_benchmark_propre} pour reutilisation eventuelle."""
+    d = df_avec_benchmarks
+    n_total = d["course_id"].nunique()
+    n_reel = d.loc[d["est_benchmark_reel"], "course_id"].nunique()
+    n_propre = d.loc[d["est_benchmark_propre"], "course_id"].nunique()
+    log("\n" + "=" * 100)
+    titre = "PROTOCOLE D'EVALUATION -- benchmark reel vs benchmark donnees propres"
+    log(f"=== {titre}{(' -- ' + label) if label else ''} ===")
+    log("=" * 100)
+    log(f"  Population consideree ici : {n_total} courses")
+    log(f"  BENCHMARK REEL (reference principale)  : {n_reel} courses "
+        f"({round(100 * n_reel / n_total, 1) if n_total else 0}% de la population)")
+    log(f"  BENCHMARK DONNEES PROPRES               : {n_propre} courses "
+        f"({round(100 * n_propre / n_total, 1) if n_total else 0}% de la population)")
+    motifs_presents = d.drop_duplicates("course_id")["motif_exclusion_benchmark"].value_counts(dropna=True)
+    if motifs_presents.empty:
+        log("  Aucune exclusion dans cette population (les courses sans_resultat, si presentes dans")
+        log("  l'univers de depart, ont deja disparu du DataFrame evalue -- comportement attendu).")
+    else:
+        log("\n  Motifs d'exclusion (une course comptee une seule fois par motif) :")
+        for motif, n in motifs_presents.items():
+            log(f"    {NOMS_MOTIFS_EXCLUSION_BENCHMARK.get(motif, motif):75s} : {n} courses")
+    return {"n_total": n_total, "n_benchmark_reel": n_reel, "n_benchmark_propre": n_propre}
