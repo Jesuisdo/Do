@@ -1,0 +1,37 @@
+name: Piste 1 - analyse d'erreurs approfondie + variantes de ranking ciblees
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyse_variantes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances
+        run: pip install pandas numpy scikit-learn lightgbm xgboost
+      - name: Telecharger le checkpoint du run #1 (piste1-ranking-validation, cross-run)
+        uses: actions/download-artifact@v4
+        with:
+          name: checkpoint-v3-ranking
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 33099229947
+      - name: Analyse d'erreurs approfondie + 3 variantes de ranking ciblees (VALIDATION uniquement, double benchmark)
+        run: set -o pipefail; python analyse_et_variantes_piste1.py | tee rapport_analyse_variantes_piste1.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport analyse d'erreurs + variantes (piste 1) - VALIDATION, double benchmark" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_analyse_variantes_piste1.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-analyse-variantes-piste1
+          path: rapport_analyse_variantes_piste1.txt
