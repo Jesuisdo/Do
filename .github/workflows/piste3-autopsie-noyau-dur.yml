@@ -1,0 +1,38 @@
+name: Piste 3 - autopsie du noyau dur (analyse uniquement, pas de nouveau modele)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  autopsie:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances
+        run: pip install pandas numpy scikit-learn lightgbm
+      - name: Telecharger le checkpoint deja calcule (run genealogie #33193387440, aucun rechargement Supabase)
+        uses: actions/download-artifact@v4
+        with:
+          name: checkpoint-v3-genealogie
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 33193387440
+      - name: Autopsie du noyau dur (familles de variables + incertitude)
+        run: set -o pipefail; python entrainer_v3_phase3_autopsie.py | tee rapport_phase3_autopsie.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport autopsie noyau dur (piste 3)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_phase3_autopsie.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-phase3-autopsie
+          path: rapport_phase3_autopsie.txt
