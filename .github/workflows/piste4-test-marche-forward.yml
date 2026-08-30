@@ -2,6 +2,11 @@ name: Piste 4 - test marche forward (B+genealogie OOS 29/08 + diagnostic marche)
 
 on:
   workflow_dispatch:
+    inputs:
+      date_test:
+        description: "Date a tester (YYYY-MM-DD), OOS strict avant cette date"
+        required: false
+        default: "2026-08-29"
 
 jobs:
   test_marche:
@@ -17,6 +22,7 @@ jobs:
       - name: Entrainer B+genealogie et exporter les scores OOS 29/08 (sans toucher a cotes_historique)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          DATE_TEST_PISTE4: ${{ github.event.inputs.date_test }}
         run: set -o pipefail; python test_marche_forward_29082026.py | tee rapport_marche_forward.txt
       - name: Ajouter le rapport au resume du run
         if: always()
@@ -36,5 +42,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scores-modele-29082026
-          path: scores_modele_29082026.csv
+          path: scores_modele_*.csv
           if-no-files-found: warn
