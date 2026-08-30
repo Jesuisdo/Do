@@ -350,6 +350,10 @@ def main():
     n_lignes_export = len(df_export)
     n_courses_export = df_export["course_id"].nunique()
     lib.log(f"   {n_lignes_export} lignes exportees ({n_courses_export} courses) -> scores_modele_29082026.csv")
+    lib.log("\n===CSV_SCORES_START===")
+    for ligne_csv in df_export.to_csv(index=False).splitlines():
+        lib.log(ligne_csv)
+    lib.log("===CSV_SCORES_END===")
     lib.log("\n=== FIN (partie modele) -- comparaison avec le marche a faire hors GitHub Actions, via MCP Supabase. ===")
     return
 
