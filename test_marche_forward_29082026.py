@@ -339,6 +339,20 @@ def main():
     df_test_toutes["score_modele"] = modele.predict(X_test_full)
     df_test_toutes["rang_modele"] = df_test_toutes.groupby("course_id")["score_modele"].rank(method="min", ascending=False)
 
+    lib.log("\n[7/9] Export des scores B+genealogie OOS (29/08) en CSV -- AUCUNE connexion a cotes_historique depuis")
+    lib.log("      GitHub Actions dans cette version : le pooler Supabase a declenche un ECIRCUITBREAKER sur ce")
+    lib.log("      secret ce soir (deux runs precedents). Le rapprochement avec le marche se fait desormais en")
+    lib.log("      dehors de ce workflow, via le MCP Supabase direct (meme chemin fiable que le backfill de ce soir).")
+    colonnes_export = ["course_id", "numero", "position_arrivee", "est_gagnant", "cible_place",
+                        "rang_modele", "score_modele", "categorie_particularite"]
+    df_export = df_test_toutes[colonnes_export].copy()
+    df_export.to_csv("scores_modele_29082026.csv", index=False)
+    n_lignes_export = len(df_export)
+    n_courses_export = df_export["course_id"].nunique()
+    lib.log(f"   {n_lignes_export} lignes exportees ({n_courses_export} courses) -> scores_modele_29082026.csv")
+    lib.log("\n=== FIN (partie modele) -- comparaison avec le marche a faire hors GitHub Actions, via MCP Supabase. ===")
+    return
+
     lib.log("\n[7/9] Jointure avec les cotes de marche (table cotes_historique, base LIVE separee, memes course_id)...")
     course_ids_test = df_test_toutes["course_id"].unique().tolist()
     cotes_df = charger_cotes_marche(course_ids_test)
