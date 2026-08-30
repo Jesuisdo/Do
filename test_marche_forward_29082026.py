@@ -45,6 +45,7 @@ par Dorian). Rien n'est ecrit en base -- lecture seule des deux cotes.
 """
 import itertools
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -149,12 +150,29 @@ def entrainer_lambdarank(X_train, y_train, groups_train, X_val, y_val_eval, grou
 # separee de la base historique (resultats_courses/resultats_partants).
 # =============================================================================
 
+def _connecter_avec_retry(dsn, n_tentatives=6, delai_s=10):
+    """Le pooler Supabase renvoie parfois une erreur transitoire
+    (EAUTHQUERY : 'connection to database not available') meme quand la
+    base est saine -- deja observe sur ce projet (backfill-resultats.yml),
+    et confirme non lie a une panne large (les collectes concurrentes sur
+    le meme secret reussissent). On retente simplement avant d'abandonner."""
+    derniere_erreur = None
+    for tentative in range(1, n_tentatives + 1):
+        try:
+            return psycopg2.connect(dsn)
+        except psycopg2.OperationalError as e:
+            derniere_erreur = e
+            lib.log(f"   [connexion cotes] tentative {tentative}/{n_tentatives} echouee : {e}".strip())
+            if tentative < n_tentatives:
+                time.sleep(delai_s)
+    raise derniere_erreur
+
 def charger_cotes_marche(course_ids):
     if not DATABASE_URL_COTES:
         raise RuntimeError("DATABASE_URL_COTES (ou a defaut DATABASE_URL) absente de l'environnement.")
     if not course_ids:
         return pd.DataFrame(columns=["course_id", "numero", "minutes_avant_depart", "cote"])
-    conn = psycopg2.connect(DATABASE_URL_COTES)
+    conn = _connecter_avec_retry(DATABASE_URL_COTES)
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """SELECT course_id, numero, minutes_avant_depart, cote
