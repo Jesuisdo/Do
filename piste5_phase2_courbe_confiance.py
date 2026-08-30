@@ -36,7 +36,23 @@ modeles / les cotes, non disponibles sur le grand historique) :
 
 Puis, pour CHAQUE indicateur, construit la courbe couverture/precision :
 en selectionnant les X% de courses les plus confiantes (X = 100/90/75/60/
-50/40/30/20), calcule Top-1/Top-3/Top-5/precision sur ce sous-ensemble.
+50/40/30/20), calcule Top-1/Top-2/Top-3/Top-5/precision sur ce sous-ensemble.
+
+AJOUT (30/08/2026, demande de Dorian) : pour eviter de gonfler artificiellement
+le Top-3 en jouant systematiquement 3 chevaux, on ajoute une regle de SELECTION
+ADAPTATIVE DU NOMBRE DE CHEVAUX par course (k=1, 2 ou 3), fondee uniquement sur
+la structure de confiance DE CETTE COURSE (pas de seuil global ajuste/optimise) :
+  - k=1 si ecart_1_2 >= 0.75 * dispersion (le pick #1 est nettement detache) ;
+  - sinon k=2 si ecart_1_3 >= 0.75 * dispersion (le pick #3 est nettement
+    distance, meme si #1 et #2 sont proches) ;
+  - sinon k=3.
+Le coefficient 0.75 est un choix simple et unique (pas de grille, pas de
+recherche de seuil) -- l'objectif de ce run est de MONTRER si une regle
+adaptative raisonnable degage un vrai compromis nombre-de-chevaux/Top-3, pas
+de maximiser la metrique. On rapporte, pour chaque palier de couverture de
+courses : le nombre moyen de chevaux retenus, et le taux de reussite (le
+gagnant est-il dans les k chevaux retenus) -- a comparer aux strategies FIXES
+(toujours 1, toujours 2, toujours 3 chevaux).
 
 AUCUN TEST A/B lance ici (validation uniquement). Point-in-time strict
 herite du checkpoint phase 1 (aucune information post-depart).
@@ -125,10 +141,53 @@ def courbe_couverture(df_gagnants, indicateur, ascendant, label):
         sous = df_tri.iloc[:n_sel]
         n = len(sous)
         top1 = round(100 * float((sous["rang_geneal"] == 1).mean()), 1)
+        top2 = round(100 * float((sous["rang_geneal"] <= 2).mean()), 1)
         top3 = round(100 * float((sous["rang_geneal"] <= 3).mean()), 1)
         top5 = round(100 * float((sous["rang_geneal"] <= 5).mean()), 1)
         lignes.append({"indicateur": label, "couverture_pct": pct, "n_courses": n,
-                        "top1_pct": top1, "top3_pct": top3, "top5_pct": top5})
+                        "top1_pct": top1, "top2_pct": top2, "top3_pct": top3, "top5_pct": top5})
+    return pd.DataFrame(lignes)
+
+
+def assigner_k_adaptatif(df):
+    """k=1/2/3 par course, fonde uniquement sur ecart_1_2 / ecart_1_3 /
+    dispersion DE CETTE COURSE (voir docstring module -- regle unique, non
+    ajustee)."""
+    disp = df["dispersion"].replace(0, np.nan)
+    seuil = 0.75 * disp
+    k = np.full(len(df), 3, dtype=int)
+    k = np.where(df["ecart_1_3"] >= seuil, 2, k)
+    k = np.where(df["ecart_1_2"] >= seuil, 1, k)
+    # dispersion nulle ou n_partants<3 -> pas d'ecart_1_3 calculable, on
+    # retombe sur 1 si ecart_1_2 dispo et grand, sinon 3 par prudence.
+    k = np.where(disp.isna().values & df["ecart_1_2"].notna().values & (df["ecart_1_2"].values > 0), 1, k)
+    return k.astype(int)
+
+
+def courbe_couverture_adaptative(df_gagnants, indicateur, ascendant, label):
+    """Meme tri par indicateur de confiance de COURSE, mais le nombre de
+    chevaux joues (k) varie par course selon assigner_k_adaptatif. Compare
+    aussi aux strategies fixes k=1/2/3 sur le MEME sous-ensemble de courses."""
+    df_tri = df_gagnants.sort_values(indicateur, ascending=ascendant, na_position="last").reset_index(drop=True)
+    n_total = len(df_tri)
+    lignes = []
+    for pct in PALIERS_COUVERTURE:
+        n_sel = max(1, int(round(n_total * pct / 100)))
+        sous = df_tri.iloc[:n_sel].copy()
+        n = len(sous)
+        k_adapt = assigner_k_adaptatif(sous)
+        reussite_adapt = (sous["rang_geneal"].values <= k_adapt)
+        lignes.append({
+            "indicateur": label, "couverture_pct": pct, "n_courses": n,
+            "k_moyen_adaptatif": round(float(k_adapt.mean()), 2),
+            "pct_k1_adaptatif": round(100 * float((k_adapt == 1).mean()), 1),
+            "pct_k2_adaptatif": round(100 * float((k_adapt == 2).mean()), 1),
+            "pct_k3_adaptatif": round(100 * float((k_adapt == 3).mean()), 1),
+            "top_adaptatif_pct": round(100 * float(reussite_adapt.mean()), 1),
+            "top1_fixe_pct": round(100 * float((sous["rang_geneal"] == 1).mean()), 1),
+            "top2_fixe_pct": round(100 * float((sous["rang_geneal"] <= 2).mean()), 1),
+            "top3_fixe_pct": round(100 * float((sous["rang_geneal"] <= 3).mean()), 1),
+        })
     return pd.DataFrame(lignes)
 
 
@@ -202,9 +261,44 @@ def main():
         lib.log(f"\n   -- Indicateur : {label} --")
         for _, row in courbe.iterrows():
             lib.log(f"      couverture={row['couverture_pct']:>3}% n={row['n_courses']:>5} "
-                     f"top1={row['top1_pct']:>5}% top3={row['top3_pct']:>5}% top5={row['top5_pct']:>5}%")
+                     f"top1={row['top1_pct']:>5}% top2={row['top2_pct']:>5}% top3={row['top3_pct']:>5}% "
+                     f"top5={row['top5_pct']:>5}%")
 
     df_courbes = pd.concat(toutes_courbes, ignore_index=True)
+
+    lib.log("\n" + "=" * 100)
+    lib.log("=== SELECTION ADAPTATIVE DU NOMBRE DE CHEVAUX (k=1/2/3 selon la course, voir docstring) ===")
+    lib.log("=" * 100)
+    toutes_courbes_adapt = []
+    for col, ascendant, label in indicateurs:
+        courbe_adapt = courbe_couverture_adaptative(gagnants, col, ascendant, label)
+        toutes_courbes_adapt.append(courbe_adapt)
+        lib.log(f"\n   -- Indicateur (tri des courses) : {label} --")
+        for _, row in courbe_adapt.iterrows():
+            lib.log(f"      couverture={row['couverture_pct']:>3}% n={row['n_courses']:>5} "
+                     f"k_moyen={row['k_moyen_adaptatif']:.2f} (k=1:{row['pct_k1_adaptatif']:>4}% "
+                     f"k=2:{row['pct_k2_adaptatif']:>4}% k=3:{row['pct_k3_adaptatif']:>4}%) "
+                     f"-> reussite_adaptatif={row['top_adaptatif_pct']:>5}%  "
+                     f"[reference fixe : top1={row['top1_fixe_pct']}% top2={row['top2_fixe_pct']}% "
+                     f"top3={row['top3_fixe_pct']}%]")
+    df_courbes_adapt = pd.concat(toutes_courbes_adapt, ignore_index=True)
+
+    lib.log("\n" + "=" * 100)
+    lib.log("=== CIBLE 80% EN SELECTION ADAPTATIVE : couverture atteignable et k_moyen associe ===")
+    lib.log("=" * 100)
+    for col, ascendant, label in indicateurs:
+        courbe_adapt = df_courbes_adapt[df_courbes_adapt["indicateur"] == label].sort_values(
+            "couverture_pct", ascending=False)
+        atteint = courbe_adapt[courbe_adapt["top_adaptatif_pct"] >= 80.0]
+        if len(atteint):
+            meilleure_couverture = atteint["couverture_pct"].max()
+            ligne = atteint[atteint["couverture_pct"] == meilleure_couverture].iloc[0]
+            lib.log(f"   {label:40s} 80%+ (adaptatif) des couverture={meilleure_couverture}% "
+                    f"(n={ligne['n_courses']}, k_moyen={ligne['k_moyen_adaptatif']}, "
+                    f"reussite={ligne['top_adaptatif_pct']}%)")
+        else:
+            meilleur = courbe_adapt["top_adaptatif_pct"].max()
+            lib.log(f"   {label:40s} n'atteint jamais 80% en adaptatif sur les paliers testes (max={meilleur}%)")
 
     lib.log("\n" + "=" * 100)
     lib.log("=== SYNTHESE -- meilleur indicateur a chaque palier de couverture (classement par top3_pct) ===")
@@ -257,6 +351,11 @@ def main():
     for ligne_csv in df_courbes.to_csv(index=False).splitlines():
         lib.log(ligne_csv)
     lib.log("===CSV_COURBES_END===")
+
+    lib.log("\n===CSV_COURBES_ADAPTATIF_START===")
+    for ligne_csv in df_courbes_adapt.to_csv(index=False).splitlines():
+        lib.log(ligne_csv)
+    lib.log("===CSV_COURBES_ADAPTATIF_END===")
 
 
 if __name__ == "__main__":
