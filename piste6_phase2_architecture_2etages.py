@@ -223,9 +223,17 @@ def pipeline_etage2_predire(modele, X_bloc, df_bloc):
         df[df["dans_shortlist"]].groupby("course_id")["proba_etape2"]
         .rank(method="min", ascending=False)
     )
+    # groupby(...).min() plutot que set_index direct : en cas de dead-heat
+    # (2+ partants a egalite sur la position 1 -- pattern reel conserve dans
+    # les deux benchmarks, cf. docstring double-benchmark de v3_lib.py), il
+    # peut y avoir plusieurs lignes "gagnant" pour une meme course. On garde
+    # le MEILLEUR rang parmi les gagnants ex-aequo (si le modele a bien
+    # classe l'un des deux en #1, c'est une reussite) et on evite le crash
+    # pandas.errors.InvalidIndexError (index course_id non-unique) observe
+    # lors du premier run (30/08/2026).
     rang_gagnant = (
         df[(df["dans_shortlist"]) & (df["est_gagnant"] == 1)]
-        .set_index("course_id")["rang_etape2_intra_sl"]
+        .groupby("course_id")["rang_etape2_intra_sl"].min()
     )
     par_course = df.drop_duplicates("course_id").set_index("course_id")
     par_course["rang_final"] = par_course.index.map(rang_gagnant).fillna(99).astype(int)
