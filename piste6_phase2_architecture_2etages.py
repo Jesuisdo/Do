@@ -434,9 +434,15 @@ def main():
     lib.log("\n" + "=" * 100)
     lib.log("=== VENTILATION nb_partants / handicap (bout en bout, TEST A + TEST B) ===")
     lib.log("=" * 100)
-    for nom, courses_bloc, df_source in [("TEST A", courses_testA, df_testA_reel), ("TEST B", courses_testB, df_testB_reel)]:
-        meta = df_source.drop_duplicates("course_id")[["course_id", "nb_partants_reel", "categorie_particularite"]]
-        cb = courses_bloc.merge(meta, on="course_id", how="left")
+    for nom, courses_bloc in [("TEST A", courses_testA), ("TEST B", courses_testB)]:
+        # courses_testA/courses_testB proviennent deja de df_testA_reel/df_testB_reel
+        # (une ligne par course, TOUTES les colonnes d'origine conservees via
+        # drop_duplicates("course_id") dans pipeline_etage2_predire) : elles
+        # contiennent donc deja nb_partants_reel et categorie_particularite.
+        # Refaire un merge sur ces memes colonnes produisait des doublons
+        # suffixes (_x/_y) et le KeyError observe lors du run precedent
+        # (30/08/2026) -- on utilise directement courses_bloc.
+        cb = courses_bloc.copy()
         cb["bucket_partants"] = cb["nb_partants_reel"].apply(lib.bucket_partants)
         cb["est_handicap"] = cb["categorie_particularite"].fillna("").str.contains("HANDICAP")
         vp = ventilation(cb, "bucket_partants",
