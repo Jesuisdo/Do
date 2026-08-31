@@ -353,7 +353,7 @@ def main():
 
     # Application de l'etape 2 a VAL_CALIB (calibrage), TEST A, TEST B (confirmation)
     X_val_calib_full = sous_matrice(df_val_calib, X_val_v3_geneal, idx_val, np.ones(len(df_val_calib), dtype=bool))
-    _, courses_val_calib = pipeline_etage2_predire(modele_etage2, X_val_calib_full, df_val_calib)
+    lignes_val_calib, courses_val_calib = pipeline_etage2_predire(modele_etage2, X_val_calib_full, df_val_calib)
 
     idx_testA = df_testA.index
     X_testA_full = sous_matrice(df_testA_reel, X_testA_v3_geneal, idx_testA, np.ones(len(df_testA_reel), dtype=bool))
@@ -362,10 +362,6 @@ def main():
     idx_testB = df_testB.index
     X_testB_full = sous_matrice(df_testB_reel, X_testB_v3_geneal, idx_testB, np.ones(len(df_testB_reel), dtype=bool))
     lignes_testB, courses_testB = pipeline_etage2_predire(modele_etage2, X_testB_full, df_testB_reel)
-
-    lignes_val_calib_sl = df_val_calib[df_val_calib["dans_shortlist"]].copy()
-    lignes_val_calib_sl["proba_etape2"] = df_val_calib.loc[df_val_calib["dans_shortlist"].index, "proba_etape2"] if False else None
-    # (proba_etape2 deja injectee dans df_val_calib par pipeline_etage2_predire via .loc plus haut)
 
     lib.log("\n" + "=" * 100)
     lib.log("=== METRIQUES DE BOUT EN BOUT (etape1 -> etape2), echec etape1 = rang_final 99, jamais retire ===")
@@ -378,7 +374,7 @@ def main():
     lib.log("\n" + "=" * 100)
     lib.log("=== AUC / LOG-LOSS sur les lignes de la short-list (gagnant + 4 autres, toutes courses) ===")
     lib.log("=" * 100)
-    for nom, d in [("VAL_CALIB", df_val_calib), ("TEST A", df_testA_reel), ("TEST B", df_testB_reel)]:
+    for nom, d in [("VAL_CALIB", lignes_val_calib), ("TEST A", lignes_testA), ("TEST B", lignes_testB)]:
         sl = d[d["dans_shortlist"]].dropna(subset=["proba_etape2"])
         auc_logloss_shortlist(sl, nom)
 
@@ -388,7 +384,7 @@ def main():
     lib.log("\n" + "=" * 100)
     lib.log("=== COURBE COUVERTURE/CONFIANCE -- calibree UNIQUEMENT sur VAL_CALIB (jamais vu par etape 2) ===")
     lib.log("=" * 100)
-    sl_val_calib = df_val_calib[df_val_calib["dans_shortlist"]].dropna(subset=["proba_etape2"]).copy()
+    sl_val_calib = lignes_val_calib[lignes_val_calib["dans_shortlist"]].dropna(subset=["proba_etape2"]).copy()
     sl_val_calib = indicateurs_confiance_shortlist(sl_val_calib)
     ind_par_course = sl_val_calib.drop_duplicates("course_id")[["course_id", "entropie_shortlist", "ecart_proba_1_2"]]
     courses_val_calib_ind = courses_val_calib.merge(ind_par_course, on="course_id", how="left")
