@@ -307,10 +307,10 @@ def main():
     lib.log("  Ces seuils sont maintenant FIGES et appliques tels quels a VAL_CALIB ci-dessous "
             "(aucun ajustement possible apres ce point).")
 
+    # construire_table_par_course garde deja toutes les colonnes de df_vert_calib
+    # (dont marge_top1_top2 et est_benchmark_propre), un merge supplementaire sur
+    # les memes colonnes creerait des doublons suffixes _x/_y -- inutile, retire.
     par_course_calib = construire_table_par_course(df_vert_calib)
-    par_course_calib = par_course_calib.merge(
-        df_vert_calib.drop_duplicates("course_id")[["course_id", "marge_top1_top2", "est_benchmark_propre"]],
-        on="course_id", how="left")
 
     lib.log("\n[5/6] Analyse -- benchmark REEL puis benchmark PROPRE...")
     resultat_reel = analyser_benchmark(par_course_calib, "REEL", None, q1, q2, q3, seuils_deciles)
