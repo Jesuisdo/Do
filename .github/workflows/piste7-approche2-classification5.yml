@@ -1,0 +1,65 @@
+name: Piste 7 - approche 2 (classification directe 5 candidats VERT)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  phase1_split4:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances
+        run: pip install psycopg2-binary pandas numpy scikit-learn
+      - name: Phase 1 - chargement, variables v3+genealogie, split 70/15/7.5/7.5, checkpoint
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+        run: set -o pipefail; python piste6_phase1_split4.py | tee rapport_phase1_approche2.txt
+      - name: Ajouter le rapport phase 1 au resume du run
+        if: always()
+        run: |
+          echo "# Rapport phase 1 (piste 7 approche 2, reprend piste6_phase1_split4.py inchange)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_phase1_approche2.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le checkpoint (pour le classifieur 5 candidats)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoint-piste7-approche2-split4
+          path: checkpoint_piste6_split4.pkl
+          retention-days: 5
+
+  approche2_classification5:
+    needs: phase1_split4
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances
+        run: pip install pandas numpy scikit-learn lightgbm
+      - name: Telecharger le checkpoint de la phase 1
+        uses: actions/download-artifact@v4
+        with:
+          name: checkpoint-piste7-approche2-split4
+      - name: Approche 2 - classification directe du gagnant parmi les 5 candidats VERT
+        run: set -o pipefail; python piste7_approche2_classification5.py | tee rapport_approche2_classification5.txt
+      - name: Ajouter le rapport au resume du run
+        if: always()
+        run: |
+          echo "# Rapport approche 2 (piste 7) - classification directe 5 candidats" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat rapport_approche2_classification5.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Uploader le rapport en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-approche2-classification5
+          path: rapport_approche2_classification5.txt
