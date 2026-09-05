@@ -2,7 +2,9 @@
 
 Document de pré-enregistrement (05/09/2026), rédigé **avant** tout accès aux résultats d'un backtest sur les cotes H-15. Objectif explicite de Dorian : que le passage à un gros backtest, une fois le volume suffisant (~150-200 courses à `cov_h15_pct >= 70%`), ne nécessite aucune préparation supplémentaire ni aucun choix improvisé après coup. Aucun élément de ce document n'a été calibré ou ajusté sur les 35 courses H-15 actuellement accumulées : chantier 1 et 3 sont des spécifications pures (aucune donnée testée), chantier 2 s'appuie exclusivement sur des diagnostics déjà exécutés en VALIDATION (VAL_CALIB, 798-826 courses), totalement disjoints de l'échantillon H-15.
 
-Statut : aucun entraînement lancé, aucun seuil optimisé, aucune modification de `piste4_backtest_engine.py`, de `piste4_marche_journalier.csv`, ni du pipeline de production. `run_backtest()` reste verrouillé.
+Statut (05/09/2026, mise à jour) : aucun entraînement lancé, aucun seuil optimisé sur des résultats, aucune modification du filtre VERT ni de B+généalogie, aucune modification de `piste4_marche_journalier.csv` ni du pipeline de production. `run_backtest()` reste verrouillé.
+
+**Mise à jour (05/09/2026) — validation de Dorian** : les 4 architectures du chantier 3 sont validées telles que spécifiées ci-dessous (aucun ajout, aucun retrait). Leurs paramètres libres ont été fixés par Dorian AVANT tout accès à un résultat de ROI sur données réelles, à des valeurs simples et rondes (voir chantier 3 pour le détail et la justification de chaque valeur). Elles sont désormais implémentées dans `piste4_backtest_engine.py` (`architecture_a_confirmation_strategy`, `architecture_b_arbitre_strategy`, `architecture_c_score_combine_strategy`, `architecture_d_filtrage_incertitude_strategy`), exercées uniquement sur données synthétiques dans `_selftest()` — aucune n'a été testée sur les courses H-15 réelles déjà accumulées. L'analyse descriptive par profil (fin du chantier 2, point "ce qui n'existe pas encore") est explicitement reportée à APRÈS le gros backtest.
 
 ## Chantier 1 — Module marché H-15 : variables exploitables sans fuite
 
@@ -55,9 +57,9 @@ Aucune requête nouvelle sur le modèle, aucun réentraînement. Ce qui suit pro
 
 **Ce qui n'existe pas encore et resterait à faire (identifié, pas exécuté)** : aucun rapport déjà produit ne ventile les erreurs Top-1 par profil concret (distance, corde, discipline, hippodrome, taille du champ, catégorie de course/handicap au sens `categorie_particularite`, ou cheval favori-papier vs outsider). Une vraie réponse à "le modèle surévalue/sous-évalue certains profils" demanderait une analyse purement descriptive (comptage de taux de réussite Top-1 par sous-groupe, sur le même échantillon VAL_CALIB déjà utilisé ci-dessus, sans aucun entraînement) — faisable rapidement le jour où on rouvre le checkpoint de validation, mais non faite à ce stade pour ne pas multiplier les runs GitHub Actions (chaque run recharge ~980k lignes et réentraîne B+généalogie, ~7-8 min et ~260 Mo de checkpoint) sans validation préalable que c'est bien ce que tu veux prioriser.
 
-## Chantier 3 — Architectures de décision conceptuelles (à ne pas tester maintenant)
+## Chantier 3 — Architectures de décision conceptuelles (VALIDÉES, paramètres FIGÉS le 05/09/2026)
 
-Les 4 stratégies ci-dessous sont des spécifications. Aucune n'a été exécutée, aucun paramètre n'a été choisi par observation de résultats.
+Les 4 stratégies ci-dessous ont été validées par Dorian telles que spécifiées. Leurs paramètres libres ont été fixés le 05/09/2026, avant tout accès à un résultat de ROI sur données réelles, à des valeurs simples et documentées (voir le détail sous chaque stratégie). Elles sont implémentées dans `piste4_backtest_engine.py` et exercées uniquement sur données synthétiques (`_selftest()`) — aucune n'a été exécutée sur les courses H-15 réelles.
 
 **A. Marché comme confirmation**
 - Données nécessaires : `rang_modele`, Top-5 VERT, `cote_h15`, `rang_cote_h15` (chantier 1).
@@ -66,30 +68,33 @@ Les 4 stratégies ci-dessous sont des spécifications. Aucune n'a été exécut�
 - Risque d'overfitting : faible sur la règle elle-même (binaire, aucun seuil réglable), mais le taux de courses jouées peut être très bas avec seulement 150-200 courses — risque d'un échantillon de paris trop restreint pour conclure (à surveiller via le nombre de paris, pas à corriger en resserrant/élargissant la règle après coup).
 
 **B. Marché comme arbitre en cas de désaccord**
-- Données nécessaires : idem A, plus une cote minimale acceptable (à définir par Dorian, cf. `cote_min_acceptable` déjà prévu en section 2.6 de l'architecture).
-- Règle : si `accord_total`, parier le cheval du modèle. Si `desaccord_partiel`, basculer sur le favori marché du Top-5 (celui avec `rang_cote_h15` minimal) à condition que sa cote reste au-dessus de `cote_min_acceptable` ; sinon ne pas parier.
+- Données nécessaires : idem A, plus une cote minimale acceptable pour que le marché puisse remplacer le pick modèle.
+- Règle : si `accord_total`, parier le cheval du modèle. Si `desaccord_partiel`, basculer sur le favori marché du Top-5 (celui avec `rang_cote_h15` minimal) à condition que sa cote H-15 soit `>= SEUIL_COTE_ARBITRE_STRATEGIE_B`; sinon ne pas parier.
+- **Paramètre FIGÉ le 05/09/2026 : `SEUIL_COTE_ARBITRE_STRATEGIE_B = 2.0`** — valeur ronde choisie avant tout résultat de ROI, sans recherche de valeur optimale. Justification : en dessous de 2.0, remplacer le pick du modèle par le favori marché reviendrait à jouer un cheval dont la cote laisse peu de marge de gain même en cas de victoire ; 2.0 est le seuil le plus simple et le plus lisible au-dessus de l'évens.
 - Métriques : identiques à A, plus une comparaison explicite du sous-ensemble "arbitré" (desaccord_partiel) vs le sous-ensemble "confirmé" (accord_total), pour voir si l'arbitrage ajoute de la valeur ou en détruit.
-- Risque d'overfitting : plus élevé que A car il introduit un paramètre libre (`cote_min_acceptable`) — ce paramètre doit être fixé par Dorian AVANT le backtest et non ajusté en fonction du ROI obtenu, sans quoi la comparaison à la stratégie A perd toute validité.
+- Risque d'overfitting : le paramètre est fixé et documenté avant tout ROI réel — toute révision future devra être justifiée AVANT d'y toucher à nouveau (jamais en cherchant la valeur qui améliore le ROI observé), et documentée comme telle.
 
 **C. Score modèle/marché combiné**
-- Données nécessaires : `score_geneal` (softmax déjà existant), `proba_implicite_marche` (chantier 1, point 7).
-- Règle : score combiné `= poids * proba_modele + (1 - poids) * proba_implicite_marche`, le cheval retenu est celui du Top-5 VERT avec le score combiné maximal. `poids` est un paramètre à fixer AVANT le backtest (par exemple 0.5, ou une valeur choisie par Dorian) — jamais recherché par grid-search sur l'échantillon de test, ce qui serait un réentraînement déguisé et violerait directement la consigne "aucune optimisation après coup".
+- Données nécessaires : `proba_modele_top5` (softmax de `score_modele` restreint au Top-5), `proba_implicite_marche` (chantier 1, point 7).
+- Règle : score combiné `= POIDS_MODELE_STRATEGIE_C * proba_modele_top5 + (1 - POIDS_MODELE_STRATEGIE_C) * proba_implicite_marche`, le cheval retenu est celui du Top-5 VERT (avec cote H-15 valide) au score combiné maximal.
+- **Paramètre FIGÉ le 05/09/2026 : `POIDS_MODELE_STRATEGIE_C = 0.5`** — pondération strictement égale entre modèle et marché, le choix le plus neutre possible, aucun grid-search.
 - Métriques : identiques à A/B, plus la comparaison à un score modèle seul et à un score marché seul (`proba_implicite_marche` pure) pour vérifier que la combinaison apporte réellement quelque chose au-delà de chaque composant pris isolément.
-- Risque d'overfitting : le plus élevé des quatre — c'est la seule stratégie avec un paramètre continu. À isoler explicitement de toute recherche de valeur optimale ; si Dorian veut un jour l'optimiser, cela devra se faire sur un échantillon dédié, distinct de celui du gros backtest, jamais sur le même.
+- Risque d'overfitting : le plus élevé des quatre en principe (seule stratégie avec un paramètre continu), mais neutralisé ici par le choix a priori de 0.5 plutôt qu'une valeur optimisée. Si Dorian veut un jour explorer d'autres pondérations, cela devra se faire sur un échantillon dédié, distinct de celui du gros backtest, jamais sur le même, et jamais en resserrant sur le ROI déjà observé.
 
 **D. Filtrage des situations trop incertaines**
-- Données nécessaires : `ecart_cote_top5`, `dispersion_cotes_h15`, `gap_confiance` (déjà existant).
-- Règle : ne pas parier (indépendamment du choix du cheval) si le marché est jugé trop indécis — par exemple `ecart_cote_top5` relatif en dessous d'un seuil, ou `dispersion_cotes_h15` en dessous d'un seuil, éventuellement combiné à `faible_confiance == 1` (déjà calculé). Le cheval joué quand la course n'est pas filtrée reste `rang_modele == 1` (cette stratégie ne change pas le choix du cheval, seulement la décision de jouer ou non).
+- Données nécessaires : `ecart_cote_top5_relatif` (chantier 1), `gap_confiance` (déjà existant, non utilisé dans la version figée ci-dessous).
+- Règle : le cheval joué reste toujours `rang_modele == 1` (cette stratégie ne change jamais le choix du cheval). Ne pas parier si `ecart_cote_top5_relatif < SEUIL_ECART_COTE_TOP5_RELATIF_STRATEGIE_D`, ou si cet écart n'est pas déterminable (moins de 2 cotes H-15 valides dans le Top-5 — absence de signal marché traitée par prudence comme une incertitude).
+- **Paramètre FIGÉ le 05/09/2026 : `SEUIL_ECART_COTE_TOP5_RELATIF_STRATEGIE_D = 0.10`** (10%) — en dessous de ce seuil, l'écart entre le favori et le deuxième choix du marché est jugé trop faible pour que le marché soit considéré comme tranché ; valeur ronde, aucune recherche de valeur optimale.
 - Métriques : identiques à A, avec une attention particulière au taux de courses jouées (cette stratégie le réduit par construction) et à la comparaison winrate/ROI du sous-ensemble filtré vs non filtré.
-- Risque d'overfitting : élevé si les seuils de filtrage sont choisis en observant quelles courses filtrées auraient été perdantes — les seuils doivent être fixés par une logique indépendante du résultat (par exemple une valeur ronde ou un quantile calculé sur une période disjointe), jamais en cherchant a posteriori le seuil qui améliore le ROI sur l'échantillon du backtest.
+- Risque d'overfitting : neutralisé par le choix a priori de 10% ; toute révision de ce seuil après avoir vu le ROI observé serait un surapprentissage direct et est explicitement exclue.
 
-**Point commun aux 4 stratégies** : toutes se limitent au Top-5 VERT déjà produit par B+généalogie (aucune ne remet en cause la sélection amont), toutes utilisent uniquement des variables de marché disponibles strictement avant H-15 (chantier 1), et pour aucune un paramètre libre n'a reçu de valeur choisie dans ce document — les valeurs (poids, seuils, cote minimale) restent des décisions explicites de Dorian, à prendre avant le lancement du gros backtest et non après avoir vu les résultats.
+**Point commun aux 4 stratégies** : toutes se limitent au Top-5 VERT déjà produit par B+généalogie (aucune ne remet en cause la sélection amont), toutes utilisent uniquement des variables de marché disponibles strictement avant H-15 (chantier 1), et les 3 paramètres libres (`SEUIL_COTE_ARBITRE_STRATEGIE_B`, `POIDS_MODELE_STRATEGIE_C`, `SEUIL_ECART_COTE_TOP5_RELATIF_STRATEGIE_D`) sont désormais FIGÉS dans `piste4_backtest_engine.py`, fixés avant tout résultat de ROI sur données réelles. Ils ne doivent pas être modifiés après avoir vu un résultat de ROI sur données réelles.
 
-## Ce qui reste à décider par Dorian avant le gros backtest
+## Décisions prises par Dorian (05/09/2026)
 
-1. Confirmer ou amender les 4 architectures ci-dessus (en ajouter, en retirer, en préciser les paramètres).
-2. Fixer les valeurs des paramètres libres identifiés (poids de la stratégie C, seuils de la stratégie D, `cote_min_acceptable` de la stratégie B) — décision à prendre sans avoir vu le ROI de chacune.
-3. Décider si l'analyse descriptive par profil (fin du chantier 2) est une priorité avant le gros backtest ou peut attendre après.
-4. Le volume H-15 (35 courses actuellement, objectif 150-200) et le feu vert pour lever `run_backtest()`.
+1. Les 4 architectures ci-dessus sont validées telles que spécifiées — aucun ajout, aucun retrait.
+2. Les 3 paramètres libres sont fixés (voir chantier 3 pour le détail et la justification de chaque valeur) : `SEUIL_COTE_ARBITRE_STRATEGIE_B = 2.0`, `POIDS_MODELE_STRATEGIE_C = 0.5`, `SEUIL_ECART_COTE_TOP5_RELATIF_STRATEGIE_D = 0.10`.
+3. L'analyse descriptive par profil (fin du chantier 2) est reportée à APRÈS le gros backtest — ce n'est plus un prérequis au lancement de ce dernier.
+4. Restent à confirmer avant `run_backtest()` : le volume H-15 (objectif 150-200 courses à `cov_h15_pct >= 70%`, accumulation automatique en cours) et une règle de mise GLOBALE (cote minimale pour parier + montant de la mise, `BETTING_RULES` reste volontairement vide) — décision distincte, non couverte par la validation des architectures ci-dessus.
 
-Rien d'autre ne bloque : le jour où le volume est atteint et les paramètres ci-dessus fixés, le gros backtest peut être lancé sans travail de préparation supplémentaire.
+Le jour où le volume est atteint et la règle de mise fixée, un unique backtest décisionnel complet peut être lancé, strictement point-in-time, comparant au minimum : modèle seul, marché seul, modèle+marché, et les 4 architectures A/B/C/D — sans nouveau chantier exploratoire entre-temps.
