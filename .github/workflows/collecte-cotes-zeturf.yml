@@ -1,0 +1,25 @@
+name: Collecte des cotes en direct Zeturf (piste source tierce)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  collecte:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - run: playwright install --with-deps chromium
+
+      - run: python3 collect_odds_zeturf_render.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+
