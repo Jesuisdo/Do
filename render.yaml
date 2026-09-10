@@ -1,29 +1,28 @@
-# Blueprint Render — à utiliser via "New +" → "Blueprint" dans le dashboard
-# Render, en pointant vers le dépôt Git contenant ce dossier. Crée en un
-# clic : (1) une base Postgres gratuite pour stocker l'historique des cotes,
-# (2) un Cron Job qui exécute collect_live_odds_render.py toutes les 4
-# minutes, 24h/24 — indépendamment de cet environnement de préparation.
+# Blueprint Render — à utiliser via "New +" -> "Blueprint" dans le dashboard
+# Render, en pointant vers le depot Git contenant ce dossier. Cree en un
+# clic un Cron Job qui execute collect_live_odds_render.py toutes les
+# 2 minutes, 24h/24 - independamment de cet environnement de preparation.
 #
-# La variable DATABASE_URL est injectée automatiquement par Render dans le
-# cron job grâce au bloc "fromDatabase" ci-dessous : aucune configuration
-# manuelle de connexion à faire.
-
-databases:
-  - name: hippique-cotes-db
-    plan: free
-    databaseName: hippique_cotes
-    user: hippique
+# IMPORTANT (10/09/2026, Dorian) : ce blueprint N'ALLOUE AUCUNE base de
+# donnees Render. Il utilise exclusivement la base Supabase "PLAT" deja en
+# production (projet jvfrvttfedmabnoldbyp). La variable DATABASE_URL est
+# marquee "sync: false" ci-dessous : Render vous la demandera au moment du
+# deploiement, dans le dashboard, et ne la stocke jamais dans ce depot.
+# Renseignez exactement la meme valeur que le secret GitHub
+# DATABASE_URL_PLAT (utilise par ailleurs par collecte-cotes.yml).
+#
+# Frequence : toutes les 2 minutes, pour garantir un passage dans la
+# fenetre H-17/H-13 avant chaque depart (le cron GitHub Actions ne s'y
+# fiait pas de maniere fiable, cf. audit du 10/09/2026).
 
 services:
   - type: cron
     name: collecteur-cotes-pmu
     runtime: python
     plan: starter
-    schedule: "*/4 * * * *"
+    schedule: "*/2 * * * *"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python3 collect_live_odds_render.py"
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: hippique-cotes-db
-          property: connectionString
+        sync: false
