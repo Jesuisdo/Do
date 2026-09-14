@@ -1,0 +1,46 @@
+name: Evaluation H15 strict + regle B 10-14 septembre
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/eval-h15-rule-b-10-14.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas numpy psycopg2-binary
+      - name: Telecharger les scores deja calcules
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -L --fail \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o scoring.zip \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/10366672189/zip"
+          mkdir -p scoring
+          unzip -q scoring.zip -d scoring
+          ls -lh scoring
+      - name: Evaluer H15 strict + regle B
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          SCORES_DIR: scoring
+        run: python eval_h15_rule_b_10_14.py
+      - name: Uploader resultats
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-h15-rule-b-10-14
+          path: |
+            eval_h15_rule_b_summary.txt
+            eval_h15_rule_b_selections.csv
+            eval_h15_course_status.csv
