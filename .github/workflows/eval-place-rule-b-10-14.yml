@@ -1,0 +1,28 @@
+name: Evaluation place et gagnant-place B 10-14
+on:
+  push:
+    paths:
+      - 'eval_place_rule_b_10_14.py'
+      - '.github/workflows/eval-place-rule-b-10-14.yml'
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas
+      - name: Download evaluation H15 artifact
+        run: |
+          curl -L -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/actions/artifacts/10367112346/zip -o old.zip
+          unzip -o old.zip
+          ls -la
+      - name: Eval place
+        run: python eval_place_rule_b_10_14.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-place-rule-b-10-14
+          path: |
+            eval_place_rule_b_summary.txt
+            eval_place_rule_b_selections.csv
