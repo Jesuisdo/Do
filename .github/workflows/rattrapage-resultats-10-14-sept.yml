@@ -1,0 +1,24 @@
+name: Rattrapage resultats 10-14 septembre
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rattrapage-resultats-10-14-sept.yml'
+
+jobs:
+  rattrapage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Recuperer les resultats PLAT du 10 au 14 septembre 2026
+        run: python3 backfill_resultats_plat_reconstruction.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          DATE_DEBUT: '2026-09-10'
+          DATE_FIN: '2026-09-14'
+          SKIP_INIT_SCHEMA: 'true'
