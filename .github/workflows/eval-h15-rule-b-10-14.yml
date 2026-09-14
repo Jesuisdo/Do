@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/eval-h15-rule-b-10-14.yml'
+      - 'eval_h15_rule_b_10_14.py'
 
 permissions:
   contents: read
