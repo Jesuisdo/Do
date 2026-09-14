@@ -18,14 +18,15 @@ df['score_modele'] = pd.to_numeric(df['score_modele'], errors='coerce')
 df = df.dropna(subset=['course_id','numero','score_modele']).copy()
 df['numero'] = df['numero'].astype(int)
 
-def add_softmax(g):
-    x = g['score_modele'].to_numpy(float)
-    e = np.exp(x - np.max(x))
-    g = g.copy()
-    g['p'] = e / e.sum()
-    return g
+# Softmax par course en conservant explicitement course_id.
+# L'ancien groupby.apply(..., include_groups=False) supprimait la colonne de groupe
+# avec pandas 3.x, ce qui provoquait ensuite KeyError: 'course_id'.
+max_score = df.groupby('course_id')['score_modele'].transform('max')
+df['_exp'] = np.exp(df['score_modele'] - max_score)
+df['_sum_exp'] = df.groupby('course_id')['_exp'].transform('sum')
+df['p'] = df['_exp'] / df['_sum_exp']
+df = df.drop(columns=['_exp', '_sum_exp'])
 
-df = df.groupby('course_id', group_keys=False).apply(add_softmax, include_groups=False).reset_index(drop=True)
 course_ids = df['course_id'].drop_duplicates().tolist()
 model_sets = df.groupby('course_id')['numero'].apply(lambda s: set(map(int,s))).to_dict()
 
