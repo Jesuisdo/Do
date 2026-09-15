@@ -3,3 +3,6 @@ tzdata==2024.1
 beautifulsoup4==4.12.3
 requests==2.32.3
 playwright==1.47.0
+pandas
+numpy
+scikit-learn
