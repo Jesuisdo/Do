@@ -316,37 +316,40 @@ def main():
             print("[ROI] Aucune course strict H15.")
             return
 
-        merged = df.merge(
+                merged = df.merge(
             chosen,
             on=["course_id", "numero"],
             how="inner"
         )
-# Confiance de la course = somme des probabilités du Top 3
-course_confidence = (
-    merged.sort_values(
-        ["course_id", "p"],
-        ascending=[True, False]
-    )
-    .groupby("course_id")
-    .head(3)
-    .groupby("course_id")["p"]
-    .sum()
-)
 
-green_course_ids = set(
-    course_confidence[
-        course_confidence >= VERT_THRESHOLD
-    ].index
-)
+        # Confiance course = somme des probabilités du Top 3
+        course_confidence = (
+            merged.sort_values(
+                ["course_id", "p"],
+                ascending=[True, False]
+            )
+            .groupby("course_id")
+            .head(3)
+            .groupby("course_id")["p"]
+            .sum()
+        )
 
-merged["is_green"] = merged["course_id"].isin(green_course_ids)
+        green_course_ids = set(
+            course_confidence[
+                course_confidence >= VERT_THRESHOLD
+            ].index
+        )
 
-print(
-    f"[VERT] {len(green_course_ids)} courses vertes "
-    f"(seuil Top3 >= {VERT_THRESHOLD})"
-) 
+        merged["is_green"] = merged["course_id"].isin(
+            green_course_ids
+        )
 
-merged["edge"] = (
+        print(
+            f"[VERT] {len(green_course_ids)} courses vertes "
+            f"(seuil Top3 >= {VERT_THRESHOLD})"
+        )
+
+        merged["edge"] = (
             merged["p"]
             - 1.0 / merged["cote"]
         )
@@ -355,11 +358,12 @@ merged["edge"] = (
             (merged["p"] >= P_MIN)
             & (merged["edge"] >= EDGE_MIN)
         ].copy()
-green_bets = bets[
-    bets["is_green"]
-].copy()
 
-bets["date_course"] = (
+        green_bets = bets[
+            bets["is_green"]
+        ].copy()
+
+        bets["date_course"] = (
             bets["course_id"]
             .str.slice(0, 10)
         )
@@ -370,17 +374,19 @@ bets["date_course"] = (
                 errors="coerce"
             ) == 1
         ).astype(int)
-green_bets["date_course"] = (
-    green_bets["course_id"]
-    .str.slice(0, 10)
-)
 
-green_bets["win"] = (
-    pd.to_numeric(
-        green_bets["position_arrivee"],
-        errors="coerce"
-    ) == 1
-).astype(int)
+        green_bets["date_course"] = (
+            green_bets["course_id"]
+            .str.slice(0, 10)
+        )
+
+        green_bets["win"] = (
+            pd.to_numeric(
+                green_bets["position_arrivee"],
+                errors="coerce"
+            ) == 1
+        ).astype(int)
+
         df["date_course"] = (
             df["course_id"]
             .str.slice(0, 10)
@@ -398,9 +404,11 @@ green_bets["win"] = (
             day_bets = bets[
                 bets["date_course"] == date_course
             ].copy()
+
             day_green_bets = green_bets[
                 green_bets["date_course"] == date_course
             ].copy()
+
             day_model = df[
                 df["date_course"] == date_course
             ]
@@ -412,7 +420,6 @@ green_bets["win"] = (
 
             selections = len(day_bets)
             wins = int(day_bets["win"].sum())
-
             stake = float(selections)
 
             gross = float(
@@ -429,37 +436,41 @@ green_bets["win"] = (
                 if stake
                 else None
             )
-        green_selections = len(day_green_bets)
-        green_wins = int(day_green_bets["win"].sum())
-        green_stake = float(green_selections)
 
-        green_gross = float(
-            day_green_bets.loc[
-                day_green_bets["win"] == 1,
-                "cote"
-            ].sum()
-        )
+            green_selections = len(day_green_bets)
+            green_wins = int(day_green_bets["win"].sum())
+            green_stake = float(green_selections)
 
-        green_net = green_gross - green_stake
+            green_gross = float(
+                day_green_bets.loc[
+                    day_green_bets["win"] == 1,
+                    "cote"
+                ].sum()
+            )
 
-        green_roi = (
-            100.0 * green_net / green_stake
-            if green_stake
-            else None
-        )
+            green_net = green_gross - green_stake
 
-        print(
-            f"[VERT ROI] {date_course} | "
-            f"bets={green_selections} | "
-            f"wins={green_wins} | "
-            f"stake={green_stake:.2f} | "
-            f"gross={green_gross:.2f} | "
-            f"net={green_net:+.2f} | "
-            f"ROI={green_roi:.2f}%"
-            if green_roi is not None
-            else f"[VERT ROI] {date_course} | aucun pari"
-        )
-         valeurs = {
+            green_roi = (
+                100.0 * green_net / green_stake
+                if green_stake
+                else None
+            )
+
+            print(
+                f"[VERT ROI] {date_course} | "
+                f"bets={green_selections} | "
+                f"wins={green_wins} | "
+                f"stake={green_stake:.2f} | "
+                f"gross={green_gross:.2f} | "
+                f"net={green_net:+.2f} | "
+                + (
+                    f"ROI={green_roi:.2f}%"
+                    if green_roi is not None
+                    else "ROI=N/A"
+                )
+            )
+
+            valeurs = {
                 "model_courses":
                     int(day_model["course_id"].nunique()),
                 "strict_h15_courses":
@@ -494,8 +505,7 @@ green_bets["win"] = (
                 f"net={net:+.2f} | "
                 f"ROI={roi:.2f}%"
             )
-
-        with conn.cursor() as cur:
+             with conn.cursor() as cur:
             cur.execute("""
                 SELECT
                     COALESCE(SUM(selections),0),
