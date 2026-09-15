@@ -5,7 +5,7 @@ on:
       date_debut:
         description: Date debut YYYY-MM-DD
         required: true
-        default: '2026-01-01'
+        default: '2026-08-29'
       date_fin:
         description: Date fin YYYY-MM-DD
         required: true
@@ -23,14 +23,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install pandas numpy scikit-learn requests psycopg2-binary
+      - run: pip install pandas numpy scikit-learn lightgbm requests psycopg2-binary
       - name: Backtest Quinté historique
         env:
-          DATE_DEBUT: ${{ inputs.date_debut || '2026-01-01' }}
+          DATE_DEBUT: ${{ inputs.date_debut || '2026-08-29' }}
           DATE_FIN: ${{ inputs.date_fin || '2026-09-14' }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          DATABASE_URL_COTES: ${{ secrets.DATABASE_URL_PLAT }}
         run: python backtest_quinte_historique.py
       - uses: actions/upload-artifact@v4
         if: always()
