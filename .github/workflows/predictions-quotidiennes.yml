@@ -30,6 +30,10 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
       - name: Calcul ROI Rule B H15
-        run: python3 roi_rule_b_quotidien.py
+        run: |
+          export DATE_ROI=$(date -u -d "yesterday" +%Y-%m-%d)
+          echo "Calcul ROI pour $DATE_ROI"
+          python3 roi_rule_b_quotidien.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_PLAT }}
+          DATABASE_URL_COTES: ${{ secrets.DATABASE_URL_PLAT }}
