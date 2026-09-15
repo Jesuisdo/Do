@@ -11,6 +11,7 @@ import psycopg2
 P_MIN = 0.1393
 EDGE_MIN = -0.03
 SCORES_DIR = os.environ.get("SCORES_DIR", ".")
+VERT_THRESHOLD = 0.5848
 DB = os.environ["DATABASE_URL"]
 
 def generer_scores():
@@ -320,8 +321,32 @@ def main():
             on=["course_id", "numero"],
             how="inner"
         )
+# Confiance de la course = somme des probabilités du Top 3
+course_confidence = (
+    merged.sort_values(
+        ["course_id", "p"],
+        ascending=[True, False]
+    )
+    .groupby("course_id")
+    .head(3)
+    .groupby("course_id")["p"]
+    .sum()
+)
 
-        merged["edge"] = (
+green_course_ids = set(
+    course_confidence[
+        course_confidence >= VERT_THRESHOLD
+    ].index
+)
+
+merged["is_green"] = merged["course_id"].isin(green_course_ids)
+
+print(
+    f"[VERT] {len(green_course_ids)} courses vertes "
+    f"(seuil Top3 >= {VERT_THRESHOLD})"
+) 
+
+merged["edge"] = (
             merged["p"]
             - 1.0 / merged["cote"]
         )
@@ -330,8 +355,11 @@ def main():
             (merged["p"] >= P_MIN)
             & (merged["edge"] >= EDGE_MIN)
         ].copy()
+green_bets = bets[
+    bets["is_green"]
+].copy()
 
-        bets["date_course"] = (
+bets["date_course"] = (
             bets["course_id"]
             .str.slice(0, 10)
         )
@@ -342,7 +370,17 @@ def main():
                 errors="coerce"
             ) == 1
         ).astype(int)
+green_bets["date_course"] = (
+    green_bets["course_id"]
+    .str.slice(0, 10)
+)
 
+green_bets["win"] = (
+    pd.to_numeric(
+        green_bets["position_arrivee"],
+        errors="coerce"
+    ) == 1
+).astype(int)
         df["date_course"] = (
             df["course_id"]
             .str.slice(0, 10)
@@ -360,7 +398,9 @@ def main():
             day_bets = bets[
                 bets["date_course"] == date_course
             ].copy()
-
+            day_green_bets = green_bets[
+                green_bets["date_course"] == date_course
+            ].copy()
             day_model = df[
                 df["date_course"] == date_course
             ]
@@ -389,8 +429,37 @@ def main():
                 if stake
                 else None
             )
+        green_selections = len(day_green_bets)
+        green_wins = int(day_green_bets["win"].sum())
+        green_stake = float(green_selections)
 
-            valeurs = {
+        green_gross = float(
+            day_green_bets.loc[
+                day_green_bets["win"] == 1,
+                "cote"
+            ].sum()
+        )
+
+        green_net = green_gross - green_stake
+
+        green_roi = (
+            100.0 * green_net / green_stake
+            if green_stake
+            else None
+        )
+
+        print(
+            f"[VERT ROI] {date_course} | "
+            f"bets={green_selections} | "
+            f"wins={green_wins} | "
+            f"stake={green_stake:.2f} | "
+            f"gross={green_gross:.2f} | "
+            f"net={green_net:+.2f} | "
+            f"ROI={green_roi:.2f}%"
+            if green_roi is not None
+            else f"[VERT ROI] {date_course} | aucun pari"
+        )
+         valeurs = {
                 "model_courses":
                     int(day_model["course_id"].nunique()),
                 "strict_h15_courses":
