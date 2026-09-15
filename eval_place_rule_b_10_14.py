@@ -25,9 +25,6 @@ def comb_nums(r):
     return out
 
 def payout1(r, mise_base):
-    # PMU JSON monetary dividends are integer euro-cents. Explicit per-euro fields,
-    # when present, are also normalized from cents. Never divide dividende by miseBase:
-    # miseBase itself is in cents and dividende is the payout for that base stake.
     for k in ('dividendePourUnEuro','rapportPourUnEuro'):
         if r.get(k) is not None:
             try: return float(r[k]) / 100.0
@@ -36,11 +33,8 @@ def payout1(r, mise_base):
         try: return float(r['rapport_pour_1_euro'])
         except: pass
     try:
-        div=float(r.get('dividende'))
-        mb=float(mise_base or 100)
-        if mb <= 0: return None
-        # div cents paid for mb cents stake => payout for EUR1 = div/mb euros.
-        return div/mb
+        div=float(r.get('dividende')); mb=float(mise_base or 100)
+        return div/mb if mb > 0 else None
     except: return None
 
 rows=[]; cache={}
@@ -54,26 +48,24 @@ for _,s in sel.iterrows():
         mise=bloc.get('miseBase',100)
         rs=bloc.get('rapports',[]) if isinstance(bloc.get('rapports'),list) else [bloc]
         for r in rs:
-            if int(s.numero) in comb_nums(r):
-                place=payout1(r,mise); break
+            if int(s.numero) in comb_nums(r): place=payout1(r,mise); break
         if place is not None: break
     rows.append({**s.to_dict(),'rapport_place_1e':place})
 
-out=pd.DataFrame(rows); out.to_csv('eval_place_rule_b_selections.csv',index=False)
-# Only selections for which PMU actually published a Simple Place dividend can be settled.
-valid=out[out.rapport_place_1e.notna()].copy()
-# A returned placed dividend identifies a payable horse. Non-payable selected horses on a
-# covered course must still be losses, so determine course coverage and settle all selections
-# from courses where at least one Simple Place block was successfully parsed.
-covered_courses=set(valid.course_id)
+out=pd.DataFrame(rows)
+covered_courses=set(out.loc[out.rapport_place_1e.notna(),'course_id'])
 settled=out[out.course_id.isin(covered_courses)].copy()
 settled['place_hit']=settled.rapport_place_1e.notna()
 settled['retour_place']=settled.rapport_place_1e.fillna(0.0)
-stake=len(settled); gross=settled.retour_place.sum(); roi=(gross-stake)/stake*100 if stake else float('nan')
 cote_col=next((c for c in ['cote','cote_h15','odds'] if c in settled.columns),None)
-if cote_col:
-    settled['retour_gagnant']=settled.apply(lambda r:float(r[cote_col]) if float(r.position_arrivee)==1 else 0,axis=1)
-    gp_stake=2*len(settled); gp_gross=(settled.retour_place+settled.retour_gagnant).sum(); gp_roi=(gp_gross-gp_stake)/gp_stake*100
-else: gp_stake=gp_gross=gp_roi=float('nan')
-summary=f'''SELECTIONS B TOTAL: {len(out)}\nCOURSES AVEC SIMPLE PLACE PMU: {len(covered_courses)}\nSELECTIONS REGLEES: {len(settled)}\nSELECTIONS PLACEES PAYANTES: {int(settled.place_hit.sum())}\nSIMPLE PLACE stake={stake:.2f} gross={gross:.2f} net={gross-stake:.2f} ROI={roi:.2f}%\nGAGNANT+PLACE (1u+1u) stake={gp_stake:.2f} gross={gp_gross:.2f} net={gp_gross-gp_stake:.2f} ROI={gp_roi:.2f}%\n'''
+if not cote_col: raise RuntimeError('Colonne cote H15 absente')
+settled['retour_gagnant']=settled.apply(lambda r:float(r[cote_col]) if float(r.position_arrivee)==1 else 0.0,axis=1)
+settled.to_csv('eval_place_rule_b_selections.csv',index=False)
+
+n=len(settled)
+# Exact same selections, three strategies.
+g_stake=n; g_gross=settled.retour_gagnant.sum(); g_net=g_gross-g_stake; g_roi=g_net/g_stake*100 if n else float('nan')
+p_stake=n; p_gross=settled.retour_place.sum(); p_net=p_gross-p_stake; p_roi=p_net/p_stake*100 if n else float('nan')
+gp_stake=2*n; gp_gross=(settled.retour_gagnant+settled.retour_place).sum(); gp_net=gp_gross-gp_stake; gp_roi=gp_net/gp_stake*100 if n else float('nan')
+summary=f'''COMPARAISON STRICTE MEMES SELECTIONS\nCOURSES COUVERTES: {len(covered_courses)}\nSELECTIONS COMMUNES: {n}\nGAGNANTS: {int((settled.position_arrivee.astype(float)==1).sum())}\nPLACES PAYANTES: {int(settled.place_hit.sum())}\nSIMPLE GAGNANT stake={g_stake:.2f} gross={g_gross:.2f} net={g_net:.2f} ROI={g_roi:.2f}%\nSIMPLE PLACE stake={p_stake:.2f} gross={p_gross:.2f} net={p_net:.2f} ROI={p_roi:.2f}%\nGAGNANT+PLACE (1u+1u) stake={gp_stake:.2f} gross={gp_gross:.2f} net={gp_net:.2f} ROI={gp_roi:.2f}%\n'''
 open('eval_place_rule_b_summary.txt','w').write(summary); print(summary)
