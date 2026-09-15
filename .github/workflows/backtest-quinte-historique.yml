@@ -10,6 +10,10 @@ on:
         description: Date fin YYYY-MM-DD
         required: true
         default: '2026-09-14'
+  push:
+    paths:
+      - '.github/workflows/backtest-quinte-historique.yml'
+      - 'backtest_quinte_historique.py'
 jobs:
   backtest:
     runs-on: ubuntu-latest
@@ -22,8 +26,8 @@ jobs:
       - run: pip install pandas numpy scikit-learn requests psycopg2-binary
       - name: Backtest Quinté historique
         env:
-          DATE_DEBUT: ${{ inputs.date_debut }}
-          DATE_FIN: ${{ inputs.date_fin }}
+          DATE_DEBUT: ${{ inputs.date_debut || '2026-01-01' }}
+          DATE_FIN: ${{ inputs.date_fin || '2026-09-14' }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
