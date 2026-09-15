@@ -1,5 +1,6 @@
 import glob
 import os
+import subprocess
 from datetime import datetime, timezone
 
 import numpy as np
@@ -9,9 +10,42 @@ import psycopg2
 
 P_MIN = 0.1393
 EDGE_MIN = -0.03
-SCORES_DIR = os.environ.get("SCORES_DIR", "scoring")
+SCORES_DIR = os.environ.get("SCORES_DIR", ".")
 DB = os.environ["DATABASE_URL"]
 
+def generer_scores():
+    date_test = os.environ.get("DATE_ROI")
+
+    if not date_test:
+        raise SystemExit(
+            "[ROI] DATE_ROI manquante. "
+            "Format attendu : YYYY-MM-DD"
+        )
+
+    date_compacte = date_test.replace("-", "")
+    fichier = f"scores_modele_{date_compacte}.csv"
+
+    if os.path.exists(fichier):
+        print(f"[ROI] Scores déjà présents : {fichier}")
+        return
+
+    print(f"[ROI] Génération B+généalogie pour {date_test}...")
+
+    env = os.environ.copy()
+    env["DATE_TEST_PISTE4"] = date_test
+
+    subprocess.run(
+        ["python3", "test_marche_forward_29082026.py"],
+        env=env,
+        check=True
+    )
+
+    if not os.path.exists(fichier):
+        raise SystemExit(
+            f"[ROI] Le scoring n'a pas créé {fichier}"
+        )
+
+    print(f"[ROI] Scores générés : {fichier}")
 
 def charger_scores():
     files = sorted(
@@ -248,8 +282,7 @@ def enregistrer(conn, date_course, valeurs):
 
 def main():
     print("=== ROI RULE B H15 AUTOMATIQUE ===")
-
-    df = charger_scores()
+    generer_scores()    df = charger_scores()
 
     if df is None or df.empty:
         return
