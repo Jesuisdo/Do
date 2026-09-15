@@ -1,0 +1,38 @@
+name: Backtest Quinte historique
+on:
+  workflow_dispatch:
+    inputs:
+      date_debut:
+        description: Date debut YYYY-MM-DD
+        required: true
+        default: '2026-01-01'
+      date_fin:
+        description: Date fin YYYY-MM-DD
+        required: true
+        default: '2026-09-14'
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas numpy scikit-learn requests psycopg2-binary
+      - name: Backtest Quinté historique
+        env:
+          DATE_DEBUT: ${{ inputs.date_debut }}
+          DATE_FIN: ${{ inputs.date_fin }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python backtest_quinte_historique.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backtest-quinte-historique
+          path: |
+            backtest_quinte_historique.csv
+            backtest_quinte_historique_summary.txt
+          if-no-files-found: warn
