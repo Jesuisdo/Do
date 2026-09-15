@@ -282,7 +282,8 @@ def enregistrer(conn, date_course, valeurs):
 
 def main():
     print("=== ROI RULE B H15 AUTOMATIQUE ===")
-    generer_scores()    df = charger_scores()
+    generer_scores()  
+    df = charger_scores()
 
     if df is None or df.empty:
         return
