@@ -316,7 +316,7 @@ def main():
             print("[ROI] Aucune course strict H15.")
             return
 
-                merged = df.merge(
+        merged = df.merge(
             chosen,
             on=["course_id", "numero"],
             how="inner"
@@ -505,8 +505,8 @@ def main():
                 f"net={net:+.2f} | "
                 f"ROI={roi:.2f}%"
             )
-             with conn.cursor() as cur:
-            cur.execute("""
+            with conn.cursor() as cur:
+                cur.execute("""
                 SELECT
                     COALESCE(SUM(selections),0),
                     COALESCE(SUM(wins),0),
