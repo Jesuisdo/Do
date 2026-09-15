@@ -2,13 +2,13 @@ import re,json,urllib.request
 import pandas as pd
 
 sel=pd.read_csv('eval_h15_rule_b_selections.csv')
-# Reconstruct model ranking from the full score files downloaded by workflow.
 frames=[]
 for f in ['scores_modele_20260910.csv','scores_modele_20260911.csv','scores_modele_20260912.csv','scores_modele_20260913.csv','scores_modele_20260914.csv']:
     try: frames.append(pd.read_csv(f))
     except: pass
 scores=pd.concat(frames,ignore_index=True)
-scorecol=next(c for c in ['score_model','score','proba','probabilite'] if c in scores.columns)
+# Export B+genealogie uses score_modele (verified in production scoring script).
+scorecol=next(c for c in ['score_modele','score_model','score','proba','probabilite'] if c in scores.columns)
 numcol=next(c for c in ['numero','num_cheval','num'] if c in scores.columns)
 scores=scores.sort_values(['course_id',scorecol],ascending=[True,False])
 top5=scores.groupby('course_id').head(5).groupby('course_id')[numcol].apply(lambda x:[int(v) for v in x]).to_dict()
@@ -37,7 +37,6 @@ def pay(r,mb):
  try:return float(r.get('dividende'))/float(mb or 100)
  except:return None
 
-# unique model courses; API itself tells us whether Quinté reports exist
 courses=scores[['course_id']].drop_duplicates().copy(); rows=[]
 for cid in courses.course_id:
  sub=scores[scores.course_id==cid]; date=str(sub.iloc[0].get('date',cid[:10])); rr=reps(date,cid)
@@ -48,8 +47,7 @@ for cid in courses.course_id:
    rs=b.get('rapports',[]) if isinstance(b.get('rapports'),list) else [b]
    for r in rs:q.append((typ,str(r.get('sousTypeRapport') or r.get('libelle') or r.get('typeRapport') or '').upper(),nums(r),pay(r,b.get('miseBase',200))))
  if not q or cid not in top5:continue
- pred=top5[cid]; ret=0.; hit='PERDU'; official=None
- # exact hierarchy: order, disorder, 4/5, bonus3
+ pred=top5[cid]; ret=0.; hit='PERDU'
  for level in ['ORDRE','DESORDRE','4SUR5','BONUS 3']:
   cand=[]
   for typ,lab,comb,p in q:
@@ -58,8 +56,9 @@ for cid in courses.course_id:
    elif level=='DESORDRE' and 'DESORDRE' in tag and set(pred)==set(comb[:5]):cand.append(p)
    elif level=='4SUR5' and ('4SUR5' in tag or '4 SUR 5' in tag) and len(set(pred)&set(comb))>=4:cand.append(p)
    elif level=='BONUS 3' and ('BONUS_3' in tag or 'BONUS 3' in tag) and len(set(pred)&set(comb))>=3:cand.append(p)
+  cand=[x for x in cand if x is not None]
   if cand:
-   ret=max(x for x in cand if x is not None);hit=level;break
+   ret=max(cand);hit=level;break
  rows.append({'course_id':cid,'top5':'-'.join(map(str,pred)),'rang_paye':hit,'retour_pour_1e':ret})
 out=pd.DataFrame(rows);out.to_csv('eval_quinte_top5.csv',index=False)
 N=len(out);gross=out.retour_pour_1e.sum() if N else 0
